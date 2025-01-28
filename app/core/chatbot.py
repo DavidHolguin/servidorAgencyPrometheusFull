@@ -93,8 +93,12 @@ class ChatbotManager:
             # Obtener información de la agencia
             agency = supabase.table('agencies').select('*').eq('id', agency_id).execute().data[0]
             
-            # Obtener hoteles
-            hotels = supabase.table('hotels').select('*').eq('agency_id', agency_id).execute().data
+            # Obtener hoteles con sus tipos de habitaciones y amenidades
+            hotels_query = supabase.table('hotels')\
+                .select('*, room_types(id, name, description, max_occupancy, base_price, amenities)')\
+                .eq('agency_id', agency_id)\
+                .execute()
+            hotels = hotels_query.data
             
             # Obtener paquetes
             packages = supabase.table('packages').select('*').eq('agency_id', agency_id).execute().data
@@ -104,7 +108,7 @@ class ChatbotManager:
             You are a travel assistant for {agency['name']}.
             Context: {self.chatbot_data.get('context', '')}
             
-            Available Hotels:
+            Available Hotels and Room Types:
             {json.dumps(hotels, indent=2)}
             
             Available Packages:
@@ -112,9 +116,11 @@ class ChatbotManager:
             
             Instructions:
             - Always be helpful and professional
+            - You can provide detailed information about hotels, room types, costs, and amenities
             - You can check room availability and make bookings
-            - You can provide information about hotels and packages
+            - You can process audio messages if they are provided
             - If you need to create a booking, use the booking API
+            - When asked about room types, costs or amenities, use the data from the database
             """
             return context
         except Exception as e:
@@ -122,8 +128,39 @@ class ChatbotManager:
                 raise Exception(f"Error building context: {str(e)}")
             return "You are a helpful travel assistant. This is a development context."
 
-    async def process_message(self, message: str, lead_id: str = None) -> str:
+    async def get_room_types(self, hotel_id: str) -> List[Dict]:
+        """Obtiene los tipos de habitaciones de un hotel con sus detalles"""
+        try:
+            response = supabase.table('room_types')\
+                .select('*')\
+                .eq('hotel_id', hotel_id)\
+                .execute()
+            return response.data
+        except Exception as e:
+            print(f"Error getting room types: {str(e)}")
+            raise e
+
+    async def get_room_details(self, room_type_id: str) -> Dict:
+        """Obtiene los detalles completos de un tipo de habitación"""
+        try:
+            response = supabase.table('room_types')\
+                .select('*')\
+                .eq('id', room_type_id)\
+                .single()\
+                .execute()
+            return response.data
+        except Exception as e:
+            print(f"Error getting room details: {str(e)}")
+            raise e
+
+    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> str:
         """Procesa un mensaje y retorna la respuesta"""
+        
+        # Procesar audio si está presente
+        if audio_content:
+            # Aquí se procesaría el audio usando un servicio de STT
+            # Por ahora solo agregamos una nota en el mensaje
+            message = f"[Audio Message]: {message}"
         
         # Obtener historial de mensajes recientes si existe lead_id
         messages = []
@@ -164,14 +201,16 @@ class ChatbotManager:
 
         # Guardar mensaje en la base de datos si existe lead_id
         if lead_id:
+            # Guardar mensaje del usuario
             supabase.table('chat_messages').insert([{
                 'chatbot_id': self.chatbot_id,
                 'lead_id': lead_id,
                 'message': message,
                 'is_bot': False,
-                'metadata': {}
+                'metadata': {'has_audio': bool(audio_content)}
             }]).execute()
 
+            # Guardar respuesta del chatbot
             supabase.table('chat_messages').insert([{
                 'chatbot_id': self.chatbot_id,
                 'lead_id': lead_id,

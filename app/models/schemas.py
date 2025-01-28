@@ -18,6 +18,7 @@ class Message(BaseModel):
     message: str = Field(..., description="Contenido del mensaje del usuario")
     lead_id: Optional[str] = Field(None, description="ID único del usuario o conversación")
     channel: Optional[Channel] = Field(Channel.WEB, description="Canal por el que se recibe el mensaje")
+    audio_content: Optional[str] = Field(None, description="Contenido del mensaje de audio en base64")
     metadata: Optional[Dict[str, Any]] = Field(
         default={},
         description="Metadatos adicionales del mensaje (ej: ubicación, preferencias)"
@@ -108,3 +109,23 @@ class BookingResponse(BaseModel):
         ...,
         description="Detalles completos de la reserva"
     )
+
+class RoomType(BaseModel):
+    """
+    Modelo para tipos de habitación
+    """
+    id: str = Field(..., description="ID único del tipo de habitación")
+    name: str = Field(..., description="Nombre del tipo de habitación")
+    description: str = Field(..., description="Descripción del tipo de habitación")
+    max_occupancy: int = Field(..., description="Ocupación máxima")
+    base_price: float = Field(..., description="Precio base por noche")
+    amenities: List[str] = Field(..., description="Lista de amenidades disponibles")
+    gallery: Optional[List[str]] = Field(None, description="Lista de URLs de imágenes")
+    cover_url: Optional[str] = Field(None, description="URL de la imagen principal")
+
+class RoomTypeResponse(BaseModel):
+    """
+    Modelo para respuesta de consulta de tipos de habitación
+    """
+    room_types: List[RoomType] = Field(..., description="Lista de tipos de habitación disponibles")
+    total_count: int = Field(..., description="Número total de tipos de habitación")

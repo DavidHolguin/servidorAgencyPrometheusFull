@@ -81,14 +81,13 @@ async def test_supabase():
         return {"error": str(e)}
 
 # Importar routers
-from app.api.v1.chat import router as chat_router
-from app.api.v1.webhooks import router as webhook_router
-from app.api.v1.reservas import router as reservas_router
+from app.api.v1 import chat, reservas, webhooks, admin_chat
 
 # Incluir routers con sus prefijos
-app.include_router(chat_router, prefix="/api/v1/chat", tags=["chatbot"])
-app.include_router(webhook_router, prefix="/api/v1/webhooks", tags=["webhooks"])
-app.include_router(reservas_router, prefix="/api/v1/reservas", tags=["reservas"])
+app.include_router(chat.router, prefix="/api/v1", tags=["chatbot"])
+app.include_router(reservas.router, prefix="/api/v1", tags=["reservas"])
+app.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
+app.include_router(admin_chat.router, prefix="/api/v1", tags=["admin_chat"])
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,7 +1,7 @@
 # app/api/v1/chat.py
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Path
 from typing import Optional, Dict, Any
-from app.models.schemas import Message, BookingRequest, MessageResponse, AvailabilityResponse, BookingResponse
+from app.models.schemas import Message, BookingRequest, MessageResponse, AvailabilityResponse, BookingResponse, RoomTypeResponse, RoomType
 from app.core.chatbot import ChatbotManager
 
 router = APIRouter()
@@ -23,6 +23,7 @@ async def send_message(
             - chatbot_id: ID único del chatbot
             - message: Texto del mensaje del usuario
             - lead_id: ID del usuario o conversación
+            - audio_content: Contenido del mensaje de audio en base64 (opcional)
 
     Returns:
         MessageResponse: Objeto con la respuesta del chatbot
@@ -36,7 +37,8 @@ async def send_message(
         print(f"ChatbotManager initialized")
         response = await chatbot.process_message(
             message.message,
-            message.lead_id
+            message.lead_id,
+            message.audio_content
         )
         print(f"Message processed successfully")
         return {"response": response}
@@ -111,5 +113,76 @@ async def create_booking(
         chatbot = ChatbotManager(booking.agency_id)
         result = await chatbot.create_booking(booking.dict())
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/room-types/{hotel_id}",
+    response_model=RoomTypeResponse,
+    summary="Obtener tipos de habitación",
+    description="Obtiene los tipos de habitación disponibles para un hotel específico"
+)
+async def get_room_types(
+    hotel_id: str = Path(..., description="ID único del hotel"),
+    chatbot_id: str = Query(..., description="ID del chatbot para el contexto")
+) -> RoomTypeResponse:
+    """
+    Obtiene los tipos de habitación disponibles para un hotel.
+
+    Args:
+        hotel_id: ID único del hotel
+        chatbot_id: ID del chatbot para el contexto
+
+    Returns:
+        RoomTypeResponse: Lista de tipos de habitación y su cantidad total
+
+    Raises:
+        HTTPException: Error 404 si no se encuentra el hotel o 500 si hay un error del servidor
+    """
+    try:
+        chatbot = ChatbotManager(chatbot_id)
+        room_types = await chatbot.get_room_types(hotel_id)
+        return {
+            "room_types": room_types,
+            "total_count": len(room_types)
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/room-types/{hotel_id}/{room_type_id}",
+    response_model=RoomType,
+    summary="Obtener detalles de tipo de habitación",
+    description="Obtiene los detalles completos de un tipo de habitación específico"
+)
+async def get_room_type_details(
+    hotel_id: str = Path(..., description="ID único del hotel"),
+    room_type_id: str = Path(..., description="ID único del tipo de habitación"),
+    chatbot_id: str = Query(..., description="ID del chatbot para el contexto")
+) -> RoomType:
+    """
+    Obtiene los detalles completos de un tipo de habitación específico.
+
+    Args:
+        hotel_id: ID único del hotel
+        room_type_id: ID único del tipo de habitación
+        chatbot_id: ID del chatbot para el contexto
+
+    Returns:
+        RoomType: Detalles completos del tipo de habitación
+
+    Raises:
+        HTTPException: Error 404 si no se encuentra el tipo de habitación o 500 si hay un error del servidor
+    """
+    try:
+        chatbot = ChatbotManager(chatbot_id)
+        room_details = await chatbot.get_room_details(room_type_id)
+        if not room_details:
+            raise ValueError(f"Room type {room_type_id} not found")
+        return room_details
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
