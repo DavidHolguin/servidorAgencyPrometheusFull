@@ -4,6 +4,7 @@ uvicorn>=0.23.0
 python-dotenv>=1.0.0
 supabase>=1.0.3
 openai>=1.0.0
+langchain>=0.1.0  # Agregado el paquete principal de langchain
 langsmith==0.0.83
 langchain-core==0.1.9
 langchain-community==0.0.13
