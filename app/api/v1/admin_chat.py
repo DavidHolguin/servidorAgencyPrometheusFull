@@ -3,7 +3,7 @@ from app.models.admin_schemas import AdminChatRequest, AdminChatResponse
 from app.core.admin_chatbot import AdminChatbotManager
 from typing import Dict
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin_chat"])
 
 @router.post(
     "/chat",
