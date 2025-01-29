@@ -258,6 +258,16 @@ Operaciones principales:
             # Add user message to history
             self.conversation_state.add_to_history("user", message)
             
+            # Convert conversation history to LangChain format
+            langchain_history = []
+            for msg in self.conversation_state.conversation_history:
+                if msg["role"] == "system":
+                    langchain_history.append(SystemMessage(content=msg["content"]))
+                elif msg["role"] == "user":
+                    langchain_history.append(HumanMessage(content=msg["content"]))
+                elif msg["role"] == "assistant":
+                    langchain_history.append(AIMessage(content=msg["content"]))
+            
             # Detect intent
             intent = await self.intent_detector.detect_intent(
                 message,
@@ -285,10 +295,8 @@ Operaciones principales:
                 return await self._handle_view_chatbot(intent)
             
             # For unknown intents, use LLM
-            self.conversation_history.append(HumanMessage(content=message))
-            response = await self.llm.agenerate([self.conversation_history])
+            response = await self.llm.agenerate([langchain_history])
             ai_message = response.generations[0][0].text
-            self.conversation_history.append(AIMessage(content=ai_message))
             
             # Add assistant response to history
             self.conversation_state.add_to_history("assistant", ai_message)

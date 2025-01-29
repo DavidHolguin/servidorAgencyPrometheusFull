@@ -1,345 +1,289 @@
-"""Intent detection and conversation flow management."""
+"""Intent detection and conversation state management module."""
 from enum import Enum
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
 import re
-from langchain.schema import (
-    SystemMessage,
-    HumanMessage,
-    AIMessage
-)
-from langchain_openai import ChatOpenAI
 
 class IntentType(Enum):
-    """Types of intents supported by the admin chatbot."""
-    CREATE = "crear"
-    UPDATE = "actualizar"
-    DELETE = "eliminar"
-    LIST = "listar"
-    VIEW = "ver"
-    STATS = "estadisticas"
-    HELP = "ayuda"
-    UNKNOWN = "desconocido"
+    """Types of intents supported by the system."""
+    CREATE = "create"
+    LIST = "list"
+    VIEW = "view"
+    UPDATE = "update"
+    DELETE = "delete"
+    HELP = "help"
+    UNKNOWN = "unknown"
 
 class EntityType(Enum):
     """Types of entities that can be managed."""
     CHATBOT = "chatbot"
     HOTEL = "hotel"
-    ROOM = "habitacion"
-    LEAD = "lead"
-    BOOKING = "reserva"
-    LANDING = "landing"
-    PACKAGE = "paquete"
-    UNKNOWN = "desconocido"
+    ROOM = "room"
+    PACKAGE = "package"
+    DESTINATION = "destination"
+    UNKNOWN = "unknown"
 
 @dataclass
 class Intent:
-    """Represents a detected intent."""
+    """Represents a detected intent with its parameters."""
     type: IntentType
     entity: EntityType
     confidence: float
-    params: Dict[str, Any]
+    params: Dict[str, Any] = field(default_factory=dict)
 
 class ConversationState:
-    """Manages conversation state and flow."""
+    """Manages the state of an ongoing conversation."""
     
     def __init__(self):
+        """Initialize conversation state."""
         self.active_process: Optional[str] = None
-        self.process_step: Optional[str] = None
+        self.current_entity: Optional[EntityType] = None
         self.collected_data: Dict[str, Any] = {}
         self.missing_fields: List[str] = []
-        self.current_entity: Optional[EntityType] = None
-        self.last_intent: Optional[Intent] = None
         self.confirmation_pending: bool = False
-        self.conversation_history: List[dict] = []
-        
-    def start_process(self, process: str, entity: EntityType, required_fields: List[str]):
-        """Start a new process."""
-        self.active_process = process
-        self.current_entity = entity
-        self.process_step = "collecting_data"
+        self.conversation_history: List[Dict[str, str]] = []
+
+    def start_process(self, process_name: str, entity_type: EntityType, required_fields: List[str]) -> None:
+        """Start a new process and initialize required fields."""
+        self.active_process = process_name
+        self.current_entity = entity_type
         self.collected_data = {}
         self.missing_fields = required_fields.copy()
         self.confirmation_pending = False
-        
-    def add_data(self, field: str, value: Any) -> bool:
-        """Add data to the current process."""
+
+    def add_data(self, field: str, value: Any) -> None:
+        """Add collected data and update missing fields."""
+        self.collected_data[field] = value
         if field in self.missing_fields:
-            self.collected_data[field] = value
             self.missing_fields.remove(field)
-            return True
-        return False
-        
+
     def is_process_complete(self) -> bool:
-        """Check if current process has all required data."""
+        """Check if all required fields are collected."""
         return len(self.missing_fields) == 0
-        
-    def clear_state(self):
-        """Clear the conversation state."""
+
+    def clear_state(self) -> None:
+        """Clear the current process state."""
         self.active_process = None
-        self.process_step = None
+        self.current_entity = None
         self.collected_data = {}
         self.missing_fields = []
-        self.current_entity = None
-        self.last_intent = None
         self.confirmation_pending = False
 
-    def add_to_history(self, role: str, content: str):
-        """Add a message to conversation history."""
-        self.conversation_history.append({"role": role, "content": content})
+    def add_to_history(self, role: str, content: str) -> None:
+        """Add a message to the conversation history."""
+        self.conversation_history.append({
+            "role": role,
+            "content": content
+        })
+
+    def get_current_state(self) -> Dict[str, Any]:
+        """Get the current state of the conversation."""
+        return {
+            "active_process": self.active_process,
+            "current_entity": self.current_entity.value if self.current_entity else None,
+            "collected_data": self.collected_data,
+            "missing_fields": self.missing_fields,
+            "confirmation_pending": self.confirmation_pending
+        }
 
 class IntentDetector:
-    """Enhanced intent detection using LLM and pattern matching."""
-    
+    """Detects user intents from messages."""
+
     def __init__(self):
-        self.llm = ChatOpenAI(
-            temperature=0.7,
-            model_name="gpt-4-turbo-preview"
-        )
-        self._compile_patterns()
-        
-    def _compile_patterns(self):
-        """Compile regex patterns for intent detection."""
+        """Initialize intent patterns."""
         self.patterns = {
-            # Help patterns
-            (IntentType.HELP, EntityType.UNKNOWN): [
-                r"(?:que|qué|cuales|cuáles)\s+(?:puedes?|sabes?)\s+hacer",
-                r"(?:ayuda|help|instrucciones|comandos)",
-                r"(?:mostrar|ver)\s+(?:opciones|comandos|ayuda)",
-                r"(?:como|cómo)\s+(?:funciona|trabajas|operas)"
-            ],
-            
-            # Create patterns
+            # Chatbot patterns
             (IntentType.CREATE, EntityType.CHATBOT): [
-                r"crear\s+(?:un\s+)?(?:nuevo\s+)?chatbot",
+                r"crear(?:\s+un)?\s+(?:nuevo\s+)?chatbot",
                 r"nuevo\s+chatbot",
                 r"agregar\s+(?:un\s+)?chatbot",
-                r"configurar\s+(?:un\s+)?chatbot",
-                r"implementar\s+(?:un\s+)?chatbot"
+                r"configurar\s+(?:un\s+)?(?:nuevo\s+)?chatbot"
             ],
-            
-            # List patterns
             (IntentType.LIST, EntityType.CHATBOT): [
-                r"(?:ver|mostrar|listar)\s+(?:los\s+)?chatbots?",
-                r"lista\s+de\s+chatbots",
-                r"chatbots\s+(?:disponibles|existentes)",
-                r"(?:cuantos|cuántos)\s+chatbots?"
+                r"ver\s+(?:la\s+)?lista\s+(?:de\s+)?chatbots?",
+                r"mostrar\s+(?:los\s+)?chatbots",
+                r"listar\s+chatbots",
+                r"qué\s+chatbots\s+(?:hay|tengo|existen)"
+            ],
+            (IntentType.VIEW, EntityType.CHATBOT): [
+                r"ver\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"mostrar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"detalles\s+(?:del\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)"
+            ],
+            (IntentType.UPDATE, EntityType.CHATBOT): [
+                r"editar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"modificar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"actualizar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)"
+            ],
+            (IntentType.DELETE, EntityType.CHATBOT): [
+                r"eliminar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"borrar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)",
+                r"quitar\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-zA-Z0-9-]+)"
             ],
             
-            # View patterns
-            (IntentType.VIEW, EntityType.CHATBOT): [
-                r"(?:ver|mostrar)\s+(?:el\s+)?chatbot\s+(?:con\s+id\s+)?([a-fA-F0-9-]{36})",
-                r"detalles\s+(?:del\s+)?chatbot\s+(?:con\s+id\s+)?([a-fA-F0-9-]{36})",
-                r"información\s+(?:del\s+)?chatbot\s+(?:con\s+id\s+)?([a-fA-F0-9-]{36})"
+            # Hotel patterns
+            (IntentType.CREATE, EntityType.HOTEL): [
+                r"crear\s+(?:un\s+)?(?:nuevo\s+)?hotel",
+                r"nuevo\s+hotel",
+                r"agregar\s+(?:un\s+)?hotel",
+                r"configurar\s+(?:un\s+)?(?:nuevo\s+)?hotel"
+            ],
+            (IntentType.LIST, EntityType.HOTEL): [
+                r"ver\s+(?:la\s+)?lista\s+(?:de\s+)?hotele?s",
+                r"mostrar\s+(?:los\s+)?hotele?s",
+                r"listar\s+hotele?s",
+                r"qué\s+hotele?s\s+(?:hay|tengo|existen)"
+            ],
+            
+            # Help patterns
+            (IntentType.HELP, EntityType.UNKNOWN): [
+                r"ayuda",
+                r"help",
+                r"qué\s+puedo\s+hacer",
+                r"opciones",
+                r"comandos",
+                r"instrucciones"
             ]
         }
-        
-        # Compile all patterns
-        self.compiled_patterns = {
-            key: [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
-            for key, patterns in self.patterns.items()
-        }
-        
-    async def detect_intent(self, message: str, conversation_history: List[dict]) -> Intent:
+
+    async def detect_intent(self, message: str, conversation_history: List[Dict[str, str]]) -> Intent:
         """
-        Detect intent using a combination of pattern matching and LLM.
-        The LLM helps understand context and disambiguate when patterns are unclear.
-        """
-        # First try pattern matching for common intents
-        pattern_intent = self._detect_pattern_intent(message)
-        if pattern_intent.confidence > 0.8:
-            return pattern_intent
+        Detect the intent from a message using regex patterns and conversation context.
+        
+        Args:
+            message: The user's message
+            conversation_history: List of previous messages in the conversation
             
-        # If pattern matching is not confident enough, use LLM
-        return await self._detect_llm_intent(message, conversation_history)
+        Returns:
+            Intent: The detected intent with its parameters
+        """
+        message = message.lower().strip()
         
-    def _detect_pattern_intent(self, message: str) -> Intent:
-        """Detect intent using regex patterns."""
-        best_match = (IntentType.UNKNOWN, EntityType.UNKNOWN, 0.0, {})
-        
-        for (intent_type, entity_type), patterns in self.compiled_patterns.items():
+        # Check for confirmation/cancellation in active process
+        if any(word in message for word in ["si", "sí", "yes", "no", "cancelar", "terminar"]):
+            # Get the last assistant message
+            last_assistant_msg = next((msg["content"] for msg in reversed(conversation_history) 
+                                    if msg["role"] == "assistant"), "")
+            
+            # If it was asking for confirmation
+            if "confirmar" in last_assistant_msg.lower() or "confirme" in last_assistant_msg.lower():
+                return Intent(
+                    type=IntentType.CREATE if "si" in message or "sí" in message or "yes" in message 
+                          else IntentType.UNKNOWN,
+                    entity=EntityType.UNKNOWN,
+                    confidence=1.0,
+                    params={"confirmation": "yes" if "si" in message or "sí" in message or "yes" in message else "no"}
+                )
+
+        # Check each pattern
+        for (intent_type, entity_type), patterns in self.patterns.items():
             for pattern in patterns:
-                match = pattern.search(message)
+                match = re.search(pattern, message, re.IGNORECASE)
                 if match:
-                    # Calculate confidence based on match length and position
-                    match_len = match.end() - match.start()
-                    position_score = 1 - (match.start() / len(message))
-                    confidence = (match_len / len(message) + position_score) / 2
+                    params = {}
+                    # Extract ID if present in the match groups
+                    if match.groups():
+                        params["id"] = match.group(1)
                     
-                    if confidence > best_match[2]:
-                        params = self._extract_params(message, intent_type, entity_type)
-                        best_match = (intent_type, entity_type, confidence, params)
+                    return Intent(
+                        type=intent_type,
+                        entity=entity_type,
+                        confidence=1.0,
+                        params=params
+                    )
+
+        # If no pattern matches, try to infer from context
+        return self._infer_from_context(message, conversation_history)
+
+    def _infer_from_context(self, message: str, conversation_history: List[Dict[str, str]]) -> Intent:
+        """Infer intent from conversation context when no pattern matches."""
+        # Get the last assistant message
+        last_assistant_msg = next((msg["content"] for msg in reversed(conversation_history) 
+                                if msg["role"] == "assistant"), "")
         
+        # If the last message was asking for a chatbot name
+        if "nombre del chatbot" in last_assistant_msg.lower():
+            return Intent(
+                type=IntentType.CREATE,
+                entity=EntityType.CHATBOT,
+                confidence=0.8,
+                params={"name": message}
+            )
+        
+        # If the last message was asking for a chatbot description
+        if "descripción" in last_assistant_msg.lower() and "chatbot" in last_assistant_msg.lower():
+            return Intent(
+                type=IntentType.CREATE,
+                entity=EntityType.CHATBOT,
+                confidence=0.8,
+                params={"description": message}
+            )
+        
+        # Default to unknown intent
         return Intent(
-            type=best_match[0],
-            entity=best_match[1],
-            confidence=best_match[2],
-            params=best_match[3]
+            type=IntentType.UNKNOWN,
+            entity=EntityType.UNKNOWN,
+            confidence=0.0
         )
-        
-    async def _detect_llm_intent(self, message: str, conversation_history: List[dict]) -> Intent:
-        """Use LLM to detect intent when pattern matching is not confident."""
-        system_prompt = """You are an intent detection system for an administrative chatbot.
-        Your task is to analyze the user's message and determine their intent.
-        
-        Available intents:
-        - CREATE: User wants to create something
-        - UPDATE: User wants to update something
-        - DELETE: User wants to delete something
-        - LIST: User wants to list items
-        - VIEW: User wants to view details
-        - STATS: User wants to see statistics
-        - HELP: User needs help or information
-        - UNKNOWN: Intent cannot be determined
-        
-        Available entities:
-        - CHATBOT: Related to chatbot management
-        - HOTEL: Related to hotel management
-        - ROOM: Related to room management
-        - LEAD: Related to lead management
-        - BOOKING: Related to booking management
-        - UNKNOWN: Entity cannot be determined
-        
-        Respond in JSON format:
-        {
-            "intent": "INTENT_TYPE",
-            "entity": "ENTITY_TYPE",
-            "confidence": 0.0-1.0,
-            "params": {}
-        }"""
-        
-        # Prepare conversation context
-        messages = [SystemMessage(content=system_prompt)]
-        
-        # Add conversation history
-        for msg in conversation_history[-3:]:  # Last 3 messages for context
-            if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
-            else:
-                messages.append(AIMessage(content=msg["content"]))
-        
-        # Add current message
-        messages.append(HumanMessage(content=message))
-        
-        # Get LLM response
-        response = await self.llm.agenerate([messages])
-        result = response.generations[0][0].text
-        
-        try:
-            # Parse LLM response
-            import json
-            data = json.loads(result)
-            return Intent(
-                type=IntentType[data["intent"]],
-                entity=EntityType[data["entity"]],
-                confidence=float(data["confidence"]),
-                params=data["params"]
-            )
-        except:
-            # If parsing fails, return unknown intent
-            return Intent(
-                type=IntentType.UNKNOWN,
-                entity=EntityType.UNKNOWN,
-                confidence=0.0,
-                params={}
-            )
-            
-    def _extract_params(self, message: str, intent_type: IntentType, entity_type: EntityType) -> Dict[str, Any]:
-        """Extract parameters from message based on intent and entity type."""
-        params = {}
-        
-        # Extract IDs
-        id_pattern = r"(?:id|identificador)\s*[:=]?\s*([a-fA-F0-9-]{36})"
-        id_match = re.search(id_pattern, message)
-        if id_match:
-            params["id"] = id_match.group(1)
-            
-        # Extract dates
-        date_pattern = r"(?:fecha|desde|hasta)\s*[:=]?\s*(\d{4}-\d{2}-\d{2})"
-        date_matches = re.finditer(date_pattern, message)
-        dates = [m.group(1) for m in date_matches]
-        if dates:
-            params["dates"] = dates
-            
-        return params
 
 class ResponseGenerator:
-    """Generates appropriate responses based on conversation state."""
+    """Generates appropriate responses based on intent and conversation state."""
     
     def __init__(self):
+        """Initialize response templates and entity fields."""
         self.entity_fields = {
             EntityType.CHATBOT: {
-                "required": [
-                    "name",
-                    "description",
-                    "welcome_message",
-                    "context",
-                    "model_config"
-                ],
-                "optional": [
-                    "icon",
-                    "theme_color",
-                    "custom_instructions"
-                ],
-                "field_names": {
-                    "name": "nombre",
-                    "description": "descripción",
-                    "welcome_message": "mensaje de bienvenida",
-                    "context": "contexto del chatbot",
-                    "model_config": "configuración del modelo",
-                    "icon": "ícono",
-                    "theme_color": "color del tema",
-                    "custom_instructions": "instrucciones personalizadas"
-                }
+                "required": ["name", "description"],
+                "optional": ["icon_url", "welcome_message"]
+            },
+            EntityType.HOTEL: {
+                "required": ["name", "description", "address", "city", "country"],
+                "optional": ["rating", "amenities"]
             }
         }
         
-    def get_next_question(self, state: ConversationState) -> str:
-        """Get next question based on missing fields."""
-        if not state.missing_fields:
-            return self.get_confirmation_message(state)
-            
-        field = state.missing_fields[0]
-        entity_config = self.entity_fields[state.current_entity]
-        field_name = entity_config["field_names"].get(field, field)
-        
-        questions = {
-            "name": f"¿Cuál será el nombre del {state.current_entity.value}?",
-            "description": f"Por favor, proporcione una descripción clara del {state.current_entity.value}:",
-            "welcome_message": "¿Cuál será el mensaje de bienvenida que mostrará el chatbot?",
-            "context": "Describa el contexto o propósito principal del chatbot:",
-            "model_config": "¿Qué modelo de lenguaje desea utilizar? (gpt-4, gpt-3.5-turbo):",
-            "icon": "Puede proporcionar un ícono para el chatbot (opcional):",
-            "theme_color": "¿Desea especificar un color tema? (ej: #FF5733, opcional):",
-            "custom_instructions": "¿Hay instrucciones específicas para el comportamiento del chatbot? (opcional):"
-        }
-        
-        return questions.get(field, f"Por favor, ingrese {field_name}:")
-        
-    def get_confirmation_message(self, state: ConversationState) -> str:
-        """Get confirmation message with collected data."""
-        entity_config = self.entity_fields[state.current_entity]
-        field_names = entity_config["field_names"]
-        
-        message = f"He recopilado la siguiente información para el {state.current_entity.value}:\n\n"
-        for field, value in state.collected_data.items():
-            field_name = field_names.get(field, field)
-            message += f"• {field_name}: {value}\n"
-        
-        message += "\n¿Desea confirmar la creación? (sí/no)"
-        return message
-        
-    def get_error_message(self, error_type: str, details: str = "") -> str:
-        """Get error message based on error type."""
-        messages = {
-            "validation": "Los datos proporcionados no son válidos.",
-            "permission": "No tiene permisos para realizar esta acción.",
+        self.error_messages = {
             "not_found": "No se encontró el recurso solicitado.",
-            "server": "Ocurrió un error en el servidor.",
-            "invalid_input": "El valor proporcionado no es válido.",
-            "missing_field": "Falta un campo requerido.",
-            "invalid_format": "El formato proporcionado no es válido."
+            "invalid_input": "La entrada proporcionada no es válida.",
+            "server": "Ocurrió un error en el servidor: {}",
+            "permission": "No tiene permisos para realizar esta operación.",
+            "process_active": "Ya hay un proceso activo. ¿Desea cancelarlo?"
+        }
+
+    def get_next_question(self, state: ConversationState) -> str:
+        """Get the next question based on the current state."""
+        if not state.missing_fields:
+            return "¿Desea confirmar la operación?"
+            
+        current_field = state.missing_fields[0]
+        
+        # Field-specific questions
+        questions = {
+            "name": "Por favor, ingrese el nombre:",
+            "description": "Por favor, ingrese una descripción:",
+            "address": "Por favor, ingrese la dirección:",
+            "city": "Por favor, ingrese la ciudad:",
+            "country": "Por favor, ingrese el país:",
+            "welcome_message": "Por favor, ingrese el mensaje de bienvenida:",
+            "icon_url": "Por favor, proporcione la URL del ícono (opcional):"
         }
         
-        base_message = messages.get(error_type, "Ocurrió un error inesperado.")
-        return f"{base_message} {details}"
+        return questions.get(current_field, f"Por favor, ingrese {current_field}:")
+
+    def get_confirmation_message(self, state: ConversationState) -> str:
+        """Generate a confirmation message for the current process."""
+        entity_name = state.current_entity.value if state.current_entity else "recurso"
+        
+        message = f"Por favor confirme los siguientes datos para crear el {entity_name}:\n\n"
+        
+        for field, value in state.collected_data.items():
+            message += f"• {field.capitalize()}: {value}\n"
+        
+        message += "\n¿Desea confirmar la operación? (sí/no)"
+        
+        return message
+
+    def get_error_message(self, error_type: str, details: str = "") -> str:
+        """Get an appropriate error message."""
+        template = self.error_messages.get(error_type, "Error desconocido")
+        return template.format(details) if "{}" in template else template
