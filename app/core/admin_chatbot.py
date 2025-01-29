@@ -1,14 +1,9 @@
 """Admin chatbot manager module."""
+from datetime import datetime
 from typing import Dict, List, Optional, Any
-from langchain_openai import ChatOpenAI
-from langchain.schema import (
-    SystemMessage,
-    HumanMessage,
-    AIMessage
-)
 from app.core.supabase import get_supabase_client
 from app.models.admin_schemas import AdminChatResponse
-from app.models.ui_components import UIComponent, UIComponentType
+from app.models.chatbot_schemas import ChatbotCreate, ChatbotResponse
 from app.core.admin.intent import (
     IntentDetector,
     ResponseGenerator,
@@ -17,6 +12,7 @@ from app.core.admin.intent import (
     EntityType,
     Intent
 )
+from app.core.database import Database
 
 class AdminChatbotManager:
     """Main class for handling administrative tasks through chatbot interface."""
@@ -26,289 +22,260 @@ class AdminChatbotManager:
         print("Inicializando AdminChatbotManager...")
         self.agency_id = agency_id
         self.user_id = user_id
-        self.supabase = get_supabase_client()
-        
-        # Load user and agency data
-        self.user_data = self._load_user_data()
-        print(f"Datos de usuario cargados: {self.user_data}")
-        self.agency_data = self._load_agency_data()
-        print(f"Datos de agencia cargados: {self.agency_data}")
         
         # Initialize components
-        self.llm = self._initialize_llm()
+        self.conversation_state = ConversationState()
         self.intent_detector = IntentDetector()
         self.response_generator = ResponseGenerator()
-        self.conversation_state = ConversationState()
+        self.db = Database()
+        self.supabase = get_supabase_client()
+        
+        # Load agency data
+        self.agency_data = self._load_agency_data()
+        print(f"Datos de agencia cargados: {self.agency_data}")
         
         # Initialize conversation
         self._initialize_conversation()
         print("AdminChatbotManager inicializado correctamente")
-
-    def _load_user_data(self) -> Dict:
-        """Load user profile data."""
-        response = self.supabase.table("profiles").select("*").eq("id", self.user_id).execute()
-        return response.data[0] if response.data else {}
-
-    def _load_agency_data(self) -> Dict:
-        """Load agency data."""
-        response = self.supabase.table("agencies").select("*").eq("id", self.agency_id).execute()
-        return response.data[0] if response.data else {}
-
-    def _initialize_llm(self) -> ChatOpenAI:
-        """Initialize the language model."""
-        print("Inicializando modelo LLM...")
+        
+    def _load_agency_data(self) -> dict:
+        """Load agency data from database."""
         try:
-            model = ChatOpenAI(
-                temperature=0.7,
-                model_name="gpt-4-turbo-preview",
-                streaming=False,
-                request_timeout=120,
-                max_retries=3
-            )
-            print("Modelo LLM inicializado correctamente")
-            return model
+            response = self.supabase.table("agencies").select("*").eq("id", self.agency_id).execute()
+            return response.data[0] if response.data else {}
         except Exception as e:
-            print(f"Error al inicializar LLM: {str(e)}")
-            raise
+            print(f"Error loading agency data: {str(e)}")
+            return {}
 
     def _initialize_conversation(self) -> None:
         """Initialize the conversation with system prompt."""
         print("Inicializando conversación...")
-        system_prompt = self._get_system_prompt()
-        welcome_message = self._get_welcome_message()
-        
-        # Add to conversation history
-        self.conversation_state.add_to_history("system", system_prompt)
-        self.conversation_state.add_to_history("assistant", welcome_message)
-
-    def _get_system_prompt(self) -> str:
-        """Get the system prompt with current context."""
-        return f"""Eres un asistente administrativo profesional para la agencia de viajes {self.agency_data.get('name', 'Agencia')}.
-        
-        Información del usuario:
-        Nombre: {self.user_data.get('name', 'Administrador')}
-        Rol: {self.user_data.get('role', 'admin')}
-        
-        Tu objetivo es asistir al administrador en la gestión de chatbots y otros recursos de la agencia.
-        
-        Directrices:
-        1. Mantén un tono formal y profesional
-        2. Sé conciso y directo en las preguntas
-        3. Valida cada entrada antes de continuar
-        4. Mantén el contexto del proceso actual
-        5. Confirma antes de realizar operaciones irreversibles
-        6. Proporciona retroalimentación clara después de cada operación"""
-
-    def _get_welcome_message(self) -> str:
-        """Get the welcome message."""
-        return """¡Bienvenido! Soy su asistente administrativo. ¿En qué puedo ayudarle?
-
-Operaciones principales:
-• Chatbots:
-  - Crear nuevo chatbot
-  - Ver lista de chatbots
-  - Ver detalles de chatbot
-  - Editar configuración
-  - Eliminar chatbot
-
-¿Qué desea hacer?"""
-
-    async def _handle_help_intent(self) -> AdminChatResponse:
-        """Handle help intent."""
-        return AdminChatResponse(
-            message=self._get_welcome_message(),
-            success=True
-        )
-
-    async def _handle_create_chatbot(self, intent: Intent, message: str) -> AdminChatResponse:
-        """Handle chatbot creation process."""
         try:
-            # If waiting for confirmation
-            if self.conversation_state.confirmation_pending:
-                if message.lower() in ['si', 'sí', 'yes']:
-                    # Create chatbot in database
-                    chatbot_data = self.conversation_state.collected_data
-                    chatbot_data['agency_id'] = self.agency_id
-                    
-                    response = self.supabase.table('chatbots').insert(chatbot_data).execute()
-                    
-                    # Clear state and return success message
-                    self.conversation_state.clear_state()
+            # Add system message to history
+            self.conversation_state.add_to_history(
+                "system",
+                """Soy un asistente administrativo especializado en la gestión de chatbots y recursos turísticos.
+                Puedo ayudarte con las siguientes tareas:
+                
+                1. Gestión de Chatbots:
+                   - Crear nuevos chatbots
+                   - Ver lista de chatbots
+                   - Ver detalles de un chatbot
+                   - Actualizar configuración
+                   - Eliminar chatbots
+                
+                2. Gestión de Hoteles:
+                   - Agregar nuevos hoteles
+                   - Ver lista de hoteles
+                   - Actualizar información
+                   - Eliminar hoteles
+                
+                3. Gestión de Habitaciones:
+                   - Agregar habitaciones
+                   - Ver disponibilidad
+                   - Actualizar precios
+                   - Gestionar amenidades
+                
+                4. Gestión de Paquetes:
+                   - Crear paquetes turísticos
+                   - Ver paquetes disponibles
+                   - Modificar paquetes
+                   - Eliminar paquetes
+                
+                5. Análisis y Estadísticas:
+                   - Ver métricas de chatbots
+                   - Analizar conversiones
+                   - Reportes de rendimiento
+                
+                ¿En qué puedo ayudarte hoy?"""
+            )
+            print("Conversación inicializada correctamente")
+        except Exception as e:
+            print(f"Error initializing conversation: {str(e)}")
+            raise
+
+    async def process_message(self, message: str) -> AdminChatResponse:
+        """
+        Process an incoming message and return an appropriate response.
+        
+        Args:
+            message: The user's message
+            
+        Returns:
+            AdminChatResponse: The chatbot's response
+        """
+        try:
+            # Add message to conversation history
+            self.conversation_state.add_to_history("user", message)
+            
+            # Convert conversation history to the format expected by LangChain
+            history = [{"role": msg["role"], "content": msg["content"]} 
+                      for msg in self.conversation_state.conversation_history]
+
+            # Detect intent
+            intent = await self.intent_detector.detect_intent(message, history)
+            
+            # If we're in an active process, handle it
+            if self.conversation_state.active_process:
+                return await self._handle_active_process(message, intent)
+
+            # Handle new intents
+            if intent.type == IntentType.CREATE:
+                if intent.entity == EntityType.CHATBOT:
+                    # Start chatbot creation process
+                    required_fields = [
+                        "name",
+                        "description",
+                        "welcome_message",
+                        "context"
+                    ]
+                    self.conversation_state.start_process("create_chatbot", EntityType.CHATBOT, required_fields)
                     return AdminChatResponse(
-                        message="✅ ¡Chatbot creado exitosamente!",
-                        success=True,
-                        data=response.data[0] if response.data else {}
+                        message="Vamos a crear un nuevo chatbot. Por favor, ingrese el nombre del chatbot:",
+                        success=True
                     )
-                elif message.lower() in ['no', 'cancelar']:
-                    # Clear state and return cancellation message
+                    
+            elif intent.type == IntentType.LIST:
+                if intent.entity == EntityType.CHATBOT:
+                    chatbots = await self.db.list_chatbots(self.agency_id)
+                    if not chatbots:
+                        return AdminChatResponse(
+                            message="No hay chatbots registrados. ¿Desea crear uno nuevo?",
+                            success=True
+                        )
+                    response_text = "Chatbots disponibles:\n\n"
+                    for bot in chatbots:
+                        response_text += f"• {bot['name']}: {bot['description']}\n"
+                    return AdminChatResponse(
+                        message=response_text,
+                        success=True,
+                        data={"chatbots": chatbots}
+                    )
+                    
+            # Default to help message
+            return AdminChatResponse(
+                message=("No estoy seguro de cómo ayudarte. Puedo:\n"
+                         "• Crear un nuevo chatbot\n"
+                         "• Listar chatbots existentes\n"
+                         "• Ver detalles de un chatbot\n"
+                         "• Actualizar un chatbot\n"
+                         "• Eliminar un chatbot"),
+                success=True
+            )
+            
+        except Exception as e:
+            return AdminChatResponse(
+                message=self.response_generator.get_error_message("server", str(e)),
+                success=False
+            )
+
+    async def _handle_active_process(self, message: str, intent: Intent) -> AdminChatResponse:
+        """Handle messages during an active process."""
+        
+        # Check for process cancellation
+        if message.lower() in ["cancelar", "cancel", "salir", "terminar"]:
+            self.conversation_state.clear_state()
+            return AdminChatResponse(
+                message="Proceso cancelado. ¿En qué más puedo ayudarte?",
+                success=True
+            )
+
+        # Handle chatbot creation process
+        if self.conversation_state.active_process == "create_chatbot":
+            # If we're waiting for confirmation
+            if self.conversation_state.confirmation_pending:
+                if any(word in message.lower() for word in ["si", "sí", "yes"]):
+                    try:
+                        # Prepare chatbot data
+                        chatbot_data = self.conversation_state.collected_data.copy()
+                        chatbot_data['agency_id'] = self.agency_id
+                        
+                        # Add default values if not provided
+                        if 'model_config' not in chatbot_data:
+                            chatbot_data['model_config'] = {
+                                "model": "gpt-4-turbo-preview",
+                                "temperature": 0.7,
+                                "max_tokens": 1000
+                            }
+                        if 'theme_color' not in chatbot_data:
+                            chatbot_data['theme_color'] = "#007bff"
+                            
+                        # Create chatbot using schema
+                        chatbot = ChatbotCreate(**chatbot_data)
+                        
+                        # Add timestamp
+                        now = datetime.now().isoformat()
+                        data_to_insert = {
+                            **chatbot.model_dump(),
+                            'created_at': now,
+                            'updated_at': now,
+                            'is_active': True
+                        }
+                        
+                        # Insert into database
+                        response = self.supabase.table('chatbots').insert(data_to_insert).execute()
+                        created_chatbot = response.data[0] if response.data else None
+                        
+                        if not created_chatbot:
+                            raise Exception("No se pudo crear el chatbot")
+                        
+                        self.conversation_state.clear_state()
+                        return AdminChatResponse(
+                            message=f"¡Chatbot '{created_chatbot['name']}' creado exitosamente! ¿En qué más puedo ayudarte?",
+                            success=True,
+                            data={"chatbot": created_chatbot}
+                        )
+                    except Exception as e:
+                        self.conversation_state.clear_state()
+                        return AdminChatResponse(
+                            message=f"Error al crear el chatbot: {str(e)}",
+                            success=False
+                        )
+                elif any(word in message.lower() for word in ["no", "cancelar"]):
                     self.conversation_state.clear_state()
                     return AdminChatResponse(
-                        message="❌ Operación cancelada. ¿Hay algo más en lo que pueda ayudarle?",
+                        message="Proceso cancelado. ¿En qué más puedo ayudarte?",
                         success=True
                     )
                 else:
                     return AdminChatResponse(
-                        message="Por favor responda 'sí' o 'no'.",
+                        message="Por favor confirme si desea crear el chatbot con los datos proporcionados (sí/no):",
                         success=True
                     )
-            
-            # If no active process, start one
-            if not self.conversation_state.active_process:
-                self.conversation_state.start_process(
-                    "create_chatbot",
-                    EntityType.CHATBOT,
-                    self.response_generator.entity_fields[EntityType.CHATBOT]["required"]
-                )
-            
-            # If in process, handle data collection
-            if message.strip():
+
+            # Handle data collection
+            if self.conversation_state.missing_fields:
                 current_field = self.conversation_state.missing_fields[0]
                 self.conversation_state.add_data(current_field, message)
-            
-            # If all data collected, ask for confirmation
-            if self.conversation_state.is_process_complete():
-                self.conversation_state.confirmation_pending = True
+                
+                # If we have all required fields, ask for confirmation
+                if self.conversation_state.is_process_complete():
+                    self.conversation_state.confirmation_pending = True
+                    confirmation_message = "Por favor confirme los siguientes datos para el chatbot:\n\n"
+                    for field, value in self.conversation_state.collected_data.items():
+                        confirmation_message += f"• {field}: {value}\n"
+                    confirmation_message += "\n¿Desea crear el chatbot con estos datos? (sí/no):"
+                    
+                    return AdminChatResponse(
+                        message=confirmation_message,
+                        success=True
+                    )
+                
+                # Otherwise, ask for the next field
+                field_messages = {
+                    "name": "Por favor, ingrese el nombre del chatbot:",
+                    "description": "Por favor, ingrese una descripción del propósito del chatbot:",
+                    "welcome_message": "¿Cuál será el mensaje de bienvenida que mostrará el chatbot?",
+                    "context": "Por favor, proporcione el contexto o instrucciones específicas para el chatbot:"
+                }
+                
+                next_field = self.conversation_state.missing_fields[0]
                 return AdminChatResponse(
-                    message=self.response_generator.get_confirmation_message(self.conversation_state),
+                    message=field_messages.get(next_field, f"Por favor, ingrese {next_field}:"),
                     success=True
                 )
-            
-            # Ask for next field
-            return AdminChatResponse(
-                message=self.response_generator.get_next_question(self.conversation_state),
-                success=True
-            )
-            
-        except Exception as e:
-            self.conversation_state.clear_state()
-            return AdminChatResponse(
-                message=self.response_generator.get_error_message("server", str(e)),
-                success=False
-            )
 
-    async def _handle_list_chatbots(self) -> AdminChatResponse:
-        """Handle listing chatbots."""
-        try:
-            response = self.supabase.table('chatbots').select('*').eq('agency_id', self.agency_id).execute()
-            chatbots = response.data
-            
-            if not chatbots:
-                return AdminChatResponse(
-                    message="No hay chatbots creados aún. ¿Desea crear uno nuevo?",
-                    success=True
-                )
-            
-            message = f"Encontré {len(chatbots)} chatbot(s):\n\n"
-            for chatbot in chatbots:
-                message += f"• {chatbot['name']}\n"
-                if chatbot.get('description'):
-                    message += f"  {chatbot['description']}\n"
-            
-            return AdminChatResponse(
-                message=message,
-                success=True,
-                data={"chatbots": chatbots}
-            )
-            
-        except Exception as e:
-            return AdminChatResponse(
-                message=self.response_generator.get_error_message("server", str(e)),
-                success=False
-            )
-
-    async def _handle_view_chatbot(self, intent: Intent) -> AdminChatResponse:
-        """Handle viewing chatbot details."""
-        try:
-            chatbot_id = intent.params.get('id')
-            if not chatbot_id:
-                return AdminChatResponse(
-                    message="Por favor especifique el ID del chatbot que desea ver.",
-                    success=False
-                )
-            
-            response = self.supabase.table('chatbots').select('*').eq('id', chatbot_id).execute()
-            if not response.data:
-                return AdminChatResponse(
-                    message=self.response_generator.get_error_message("not_found", "No se encontró el chatbot especificado."),
-                    success=False
-                )
-            
-            chatbot = response.data[0]
-            message = f"Detalles del chatbot:\n\n"
-            message += f"• Nombre: {chatbot['name']}\n"
-            message += f"• Descripción: {chatbot['description']}\n"
-            message += f"• Mensaje de bienvenida: {chatbot.get('welcome_message', 'No definido')}\n"
-            message += f"• Modelo: {chatbot.get('model_config', {}).get('model', 'gpt-4')}\n"
-            
-            return AdminChatResponse(
-                message=message,
-                success=True,
-                data={"chatbot": chatbot}
-            )
-            
-        except Exception as e:
-            return AdminChatResponse(
-                message=self.response_generator.get_error_message("server", str(e)),
-                success=False
-            )
-
-    async def process_message(self, message: str) -> AdminChatResponse:
-        """Process an incoming message and return a response."""
-        try:
-            # Add user message to history
-            self.conversation_state.add_to_history("user", message)
-            
-            # Convert conversation history to LangChain format
-            langchain_history = []
-            for msg in self.conversation_state.conversation_history:
-                if msg["role"] == "system":
-                    langchain_history.append(SystemMessage(content=msg["content"]))
-                elif msg["role"] == "user":
-                    langchain_history.append(HumanMessage(content=msg["content"]))
-                elif msg["role"] == "assistant":
-                    langchain_history.append(AIMessage(content=msg["content"]))
-            
-            # Detect intent
-            intent = await self.intent_detector.detect_intent(
-                message,
-                self.conversation_state.conversation_history
-            )
-            
-            print(f"Intención detectada: {intent.type.value} - {intent.entity.value} ({intent.confidence})")
-            
-            # If in a process, continue with it
-            if self.conversation_state.active_process:
-                if intent.type == IntentType.HELP or message.lower() in ['cancelar', 'salir', 'terminar']:
-                    self.conversation_state.clear_state()
-                    return await self._handle_help_intent()
-                elif self.conversation_state.active_process == "create_chatbot":
-                    return await self._handle_create_chatbot(intent, message)
-            
-            # Handle new intents
-            if intent.type == IntentType.HELP:
-                return await self._handle_help_intent()
-            elif intent.type == IntentType.CREATE and intent.entity == EntityType.CHATBOT:
-                return await self._handle_create_chatbot(intent, "")
-            elif intent.type == IntentType.LIST and intent.entity == EntityType.CHATBOT:
-                return await self._handle_list_chatbots()
-            elif intent.type == IntentType.VIEW and intent.entity == EntityType.CHATBOT:
-                return await self._handle_view_chatbot(intent)
-            
-            # For unknown intents, use LLM
-            response = await self.llm.agenerate([langchain_history])
-            ai_message = response.generations[0][0].text
-            
-            # Add assistant response to history
-            self.conversation_state.add_to_history("assistant", ai_message)
-            
-            return AdminChatResponse(
-                message=ai_message,
-                success=True
-            )
-            
-        except Exception as e:
-            print(f"Error en process_message: {str(e)}")
-            return AdminChatResponse(
-                message=self.response_generator.get_error_message("server", str(e)),
-                success=False
-            )
+        return AdminChatResponse(
+            message="Lo siento, ha ocurrido un error. ¿En qué puedo ayudarte?",
+            success=False
+        )
