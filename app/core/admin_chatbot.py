@@ -115,6 +115,10 @@ class AdminChatbotManager:
             # Detect intent
             intent = await self.intent_detector.detect_intent(message, history)
             
+            # Check if we have chatbot data in the message
+            if any(key in message.lower() for key in ['nombre:', 'descripción:', 'mensaje de bienvenida:', 'contexto:']):
+                return await self._handle_chatbot_creation(message)
+            
             # If we're in an active process, handle it
             if self.conversation_state.active_process:
                 return await self._handle_active_process(message, intent)
@@ -122,6 +126,7 @@ class AdminChatbotManager:
             # Handle new intents
             if intent.type == IntentType.CREATE:
                 if intent.entity == EntityType.CHATBOT:
+                    self.conversation_state.start_process("create_chatbot", EntityType.CHATBOT, [])
                     return AdminChatResponse(
                         message=("Por favor proporcione la siguiente información para crear el chatbot "
                                 "en este formato:\n\n"
@@ -343,3 +348,88 @@ class AdminChatbotManager:
             message="Lo siento, ha ocurrido un error. ¿En qué puedo ayudarte?",
             success=False
         )
+
+    async def _handle_chatbot_creation(self, message: str) -> AdminChatResponse:
+        """Handle the creation of a new chatbot from user input."""
+        try:
+            # Parse the input message to extract chatbot information
+            chatbot_data = {}
+            
+            # Handle both newline and space-separated formats
+            if '\n' in message:
+                lines = message.split('\n')
+            else:
+                # Split by field markers if it's all in one line
+                message = message.replace('Nombre:', '\nNombre:')
+                message = message.replace('Descripción:', '\nDescripción:')
+                message = message.replace('Mensaje de bienvenida:', '\nMensaje de bienvenida:')
+                message = message.replace('Contexto:', '\nContexto:')
+                lines = message.split('\n')
+            
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+                    
+                    if key == 'nombre':
+                        chatbot_data['name'] = value
+                    elif key == 'descripción':
+                        chatbot_data['description'] = value
+                    elif key == 'mensaje de bienvenida':
+                        chatbot_data['welcome_message'] = value
+                    elif key == 'contexto':
+                        chatbot_data['context'] = value
+            
+            # Validate required fields
+            required_fields = ['name', 'description', 'welcome_message', 'context']
+            missing_fields = [field for field in required_fields if field not in chatbot_data]
+            
+            if missing_fields:
+                return AdminChatResponse(
+                    message=f"Falta la siguiente información requerida: {', '.join(missing_fields)}. "
+                           "Por favor proporciona todos los campos necesarios.",
+                    success=False
+                )
+            
+            # Add default values
+            chatbot_data['agency_id'] = self.agency_id
+            chatbot_data['model_config'] = {
+                "model": "gpt-4-turbo-preview",
+                "temperature": 0.7,
+                "max_tokens": 1000
+            }
+            chatbot_data['theme_color'] = "#007bff"
+            
+            # Create chatbot using schema
+            chatbot = ChatbotCreate(**chatbot_data)
+            
+            # Add timestamp
+            now = datetime.now().isoformat()
+            data_to_insert = {
+                **chatbot.model_dump(),
+                'created_at': now,
+                'updated_at': now,
+                'is_active': True
+            }
+            
+            # Insert into database
+            response = self.supabase.table('chatbots').insert(data_to_insert).execute()
+            created_chatbot = response.data[0] if response.data else None
+            
+            if not created_chatbot:
+                raise Exception("No se pudo crear el chatbot")
+            
+            self.conversation_state.clear_state()
+            return AdminChatResponse(
+                message=f"¡Chatbot '{created_chatbot['name']}' creado exitosamente! ¿En qué más puedo ayudarte?",
+                success=True,
+                data={"chatbot": created_chatbot}
+            )
+            
+        except Exception as e:
+            return AdminChatResponse(
+                message=f"Error al procesar la información del chatbot: {str(e)}. "
+                       "Por favor verifica el formato e intenta nuevamente.",
+                success=False
+            )
