@@ -13,17 +13,15 @@ class ChatbotManager:
         self.chatbot_id = chatbot_id
         self.chatbot_data = self._load_chatbot_data()
         self.context = self._build_context()
-        self.conversation_history = []
 
     def _get_conversation_state(self, lead_id: str) -> dict:
         """Obtiene el estado de una conversación específica"""
         if not lead_id:
-            return {"started": False, "history": []}
+            return {"history": []}
             
         key = f"{self.chatbot_id}:{lead_id}"
         if key not in self._conversation_states:
             self._conversation_states[key] = {
-                "started": False,
                 "history": []
             }
         return self._conversation_states[key]
@@ -38,50 +36,40 @@ class ChatbotManager:
         """Procesa un mensaje y retorna la respuesta"""
         try:
             print(f"Processing message for lead_id: {lead_id}")
+            print(f"Current configuration: {self.chatbot_data['configuration']}")
+            print(f"Current personality: {self.chatbot_data['personality']}")
             
             # Obtener el estado actual de la conversación
             conv_state = self._get_conversation_state(lead_id)
-            print(f"Conversation state: {conv_state}")
-            
-            # Si es el primer mensaje de esta conversación
-            if not conv_state["started"]:
-                print("First message of conversation, sending welcome message")
-                conv_state["started"] = True
-                welcome_message = self.chatbot_data["welcome_message"]
-                conv_state["history"].append({"role": "assistant", "content": welcome_message})
-                
-                # Actualizar el estado
-                self._update_conversation_state(lead_id, conv_state)
-                
-                return {
-                    "response": welcome_message,
-                    "suggested_actions": [],
-                    "context": {
-                        "is_welcome": True,
-                        "chatbot_name": self.chatbot_data["name"]
-                    }
-                }
-            
-            print(f"Processing regular message: {message}")
+            print(f"Current conversation history length: {len(conv_state['history'])}")
             
             # Añadir el mensaje del usuario al historial
             conv_state["history"].append({"role": "user", "content": message})
             
             # Construir mensajes para la API
             messages = [{"role": "system", "content": self.context}]
-            
-            # Añadir historial reciente
             recent_history = conv_state["history"][-10:] if len(conv_state["history"]) > 10 else conv_state["history"]
             messages.extend(recent_history)
             
-            print(f"Sending {len(messages)} messages to OpenAI")
+            print(f"Sending request to OpenAI with {len(messages)} messages")
             
-            # Obtener la respuesta de OpenAI
-            response = await client.chat.completions.create(
-                model=self.chatbot_data["configuration"]["model"],
+            # Asegurar que los valores de configuración son del tipo correcto
+            config = self.chatbot_data["configuration"]
+            model = str(config["model"])
+            temperature = float(config["temperature"])
+            max_tokens = int(config["max_tokens"])
+            
+            print(f"OpenAI request parameters: model={model}, temperature={temperature}, max_tokens={max_tokens}")
+            
+            # Obtener la respuesta de OpenAI usando el nuevo formato
+            from openai import AsyncOpenAI
+            async_client = AsyncOpenAI()
+            
+            response = await async_client.chat.completions.create(
+                model=model,
                 messages=messages,
-                temperature=self.chatbot_data["configuration"]["temperature"],
-                max_tokens=self.chatbot_data["configuration"]["max_tokens"],
+                temperature=temperature,
+                max_tokens=max_tokens,
                 top_p=1,
                 frequency_penalty=0,
                 presence_penalty=0
@@ -102,85 +90,25 @@ class ChatbotManager:
                 "context": {
                     "conversation_length": len(conv_state["history"]),
                     "chatbot_name": self.chatbot_data["name"],
-                    "personality": self.chatbot_data["personality"],
-                    "is_welcome": False
+                    "personality": self.chatbot_data["personality"]
                 }
             }
             
         except Exception as e:
+            import traceback
             print(f"Error processing message: {str(e)}")
+            print(f"Full error details: {traceback.format_exc()}")
             return {
                 "response": "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
                 "suggested_actions": [],
                 "context": {
-                    "error": str(e)
+                    "error": str(e),
+                    "chatbot_name": self.chatbot_data["name"]
                 }
             }
-
-    def _load_chatbot_data(self) -> Dict:
-        """Carga la información del chatbot desde Supabase"""
-        try:
-            if not supabase:
-                raise ValueError("Supabase client is not initialized")
-            
-            response = supabase.table("chatbots").select("*").eq("id", self.chatbot_id).execute()
-            if not response.data:
-                raise ValueError(f"No chatbot found with id {self.chatbot_id}")
-            
-            chatbot_data = response.data[0]
-            
-            # Asegurar que tenemos los campos mínimos necesarios
-            return {
-                "id": chatbot_data.get("id", self.chatbot_id),
-                "name": chatbot_data.get("name", "Assistant"),
-                "description": chatbot_data.get("description", ""),
-                "purpose": chatbot_data.get("purpose", "Asistente virtual"),
-                "welcome_message": chatbot_data.get("welcome_message", "¡Hola! ¿En qué puedo ayudarte?"),
-                "personality": chatbot_data.get("personality", {
-                    "tone": "profesional",
-                    "formality_level": "semiformal",
-                    "emoji_usage": "moderado",
-                    "language_style": "claro y conciso"
-                }),
-                "key_points": chatbot_data.get("key_points", []),
-                "special_instructions": chatbot_data.get("special_instructions", []),
-                "example_qa": chatbot_data.get("example_qa", []),
-                "configuration": chatbot_data.get("configuration", {
-                    "temperature": 0.7,
-                    "model": "gpt-4-turbo-preview",
-                    "max_tokens": 1000
-                })
-            }
-            
-        except Exception as e:
-            print(f"Error loading chatbot data: {str(e)}")
-            if os.getenv("ENVIRONMENT") != "production":
-                print("Using mock data in development")
-                return {
-                    "id": self.chatbot_id,
-                    "name": "Development Assistant",
-                    "description": "Development chatbot",
-                    "purpose": "Testing and development",
-                    "welcome_message": "¡Hola! Soy un chatbot de prueba.",
-                    "personality": {
-                        "tone": "profesional",
-                        "formality_level": "semiformal",
-                        "emoji_usage": "moderado",
-                        "language_style": "claro y conciso"
-                    },
-                    "key_points": ["Test point"],
-                    "special_instructions": ["Test instruction"],
-                    "example_qa": [{"question": "Test?", "answer": "Test answer"}],
-                    "configuration": {
-                        "temperature": 0.7,
-                        "model": "gpt-4-turbo-preview",
-                        "max_tokens": 1000
-                    }
-                }
-            raise
 
     def _build_context(self) -> str:
-        """Construye el contexto inicial del chatbot"""
+        """Construye el contexto del chatbot para la API"""
         try:
             personality = self.chatbot_data["personality"]
             key_points = self.chatbot_data["key_points"]
@@ -221,7 +149,8 @@ class ChatbotManager:
                 ])
             
             context_parts.append(
-                f"Recuerda mantener un tono {personality['tone']} y un nivel de formalidad {personality['formality_level']} en todas tus respuestas."
+                f"Recuerda mantener un tono {personality['tone']}, un nivel de formalidad {personality['formality_level']}, "
+                f"usar emojis de manera {personality['emoji_usage']} y mantener un estilo de lenguaje {personality['language_style']}."
             )
             
             return "\n".join(context_parts)
@@ -229,6 +158,114 @@ class ChatbotManager:
         except Exception as e:
             print(f"Error building context: {str(e)}")
             return "Eres un asistente virtual para una agencia de viajes. Ayuda a los usuarios con sus consultas de manera profesional y clara."
+
+    def _load_chatbot_data(self) -> Dict:
+        """Carga la información del chatbot desde Supabase"""
+        try:
+            if not supabase:
+                raise ValueError("Supabase client is not initialized")
+            
+            # Obtener datos de Supabase
+            response = supabase.table("chatbots").select("*").eq("id", self.chatbot_id).execute()
+            if not response.data:
+                raise ValueError(f"No chatbot found with id {self.chatbot_id}")
+            
+            chatbot_data = response.data[0]
+            print(f"Raw chatbot data from Supabase: {chatbot_data}")
+            
+            # Intentar cargar personality y configuration como JSON si son strings
+            try:
+                personality = chatbot_data.get("personality", {})
+                if isinstance(personality, str):
+                    import json
+                    personality = json.loads(personality)
+                print(f"Parsed personality: {personality}")
+            except Exception as e:
+                print(f"Error parsing personality: {e}")
+                personality = {}
+                
+            try:
+                configuration = chatbot_data.get("configuration", {})
+                if isinstance(configuration, str):
+                    import json
+                    configuration = json.loads(configuration)
+                print(f"Parsed configuration: {configuration}")
+            except Exception as e:
+                print(f"Error parsing configuration: {e}")
+                configuration = {}
+            
+            # Asegurar valores por defecto para personality
+            default_personality = {
+                "tone": "profesional",
+                "formality_level": "semiformal",
+                "emoji_usage": "moderado",
+                "language_style": "claro y conciso"
+            }
+            
+            if not isinstance(personality, dict):
+                personality = default_personality
+            else:
+                for key, default_value in default_personality.items():
+                    if key not in personality or not personality[key]:
+                        personality[key] = default_value
+            
+            # Asegurar valores por defecto para configuration
+            default_config = {
+                "temperature": 0.7,
+                "model": "gpt-4-turbo-preview",
+                "max_tokens": 1000
+            }
+            
+            if not isinstance(configuration, dict):
+                configuration = default_config
+            else:
+                for key, default_value in default_config.items():
+                    if key not in configuration or not configuration[key]:
+                        configuration[key] = default_value
+            
+            # Construir el objeto final
+            final_data = {
+                "id": str(chatbot_data.get("id", self.chatbot_id)),
+                "name": str(chatbot_data.get("name", "Assistant")),
+                "description": str(chatbot_data.get("description", "")),
+                "purpose": str(chatbot_data.get("purpose", "Asistente virtual")),
+                "welcome_message": str(chatbot_data.get("welcome_message", "¡Hola! ¿En qué puedo ayudarte?")),
+                "personality": personality,
+                "key_points": list(chatbot_data.get("key_points", [])),
+                "special_instructions": list(chatbot_data.get("special_instructions", [])),
+                "example_qa": list(chatbot_data.get("example_qa", [])),
+                "configuration": configuration
+            }
+            
+            print(f"Final chatbot data: {final_data}")
+            return final_data
+            
+        except Exception as e:
+            print(f"Error loading chatbot data: {str(e)}")
+            if os.getenv("ENVIRONMENT") != "production":
+                print("Using mock data in development")
+                return {
+                    "id": self.chatbot_id,
+                    "name": "Development Assistant",
+                    "description": "Development chatbot",
+                    "purpose": "Testing and development",
+                    "welcome_message": "¡Hola! Soy un chatbot de prueba.",
+                    "personality": {
+                        "tone": "profesional",
+                        "formality_level": "semiformal",
+                        "emoji_usage": "moderado",
+                        "language_style": "claro y conciso"
+                    },
+                    "key_points": ["Test point"],
+                    "special_instructions": ["Test instruction"],
+                    "example_qa": [{"question": "Test?", "answer": "Test answer"}],
+                    "configuration": {
+                        "temperature": 0.7,
+                        "model": "gpt-4-turbo-preview",
+                        "max_tokens": 1000
+                    }
+                }
+            raise
 
     async def get_room_types(self, hotel_id: str) -> List[Dict]:
         """Obtiene los tipos de habitaciones de un hotel con sus detalles"""

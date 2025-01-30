@@ -1,15 +1,13 @@
 # app/core/openai_client.py
-from openai import OpenAI
-from app.config.settings import get_settings
+from openai import AsyncOpenAI
+import os
 import logging
 
-settings = get_settings()
-
 try:
-    client = OpenAI(api_key=settings.openai_api_key)
-    # Verificar que la clave API es válida
-    models = client.models.list()
+    client = AsyncOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY")
+    )
     print("OpenAI client initialized successfully")
 except Exception as e:
     print(f"Error initializing OpenAI client: {str(e)}")
-    raise e
+    client = None
