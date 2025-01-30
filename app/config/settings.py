@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: Optional[str] = os.getenv("SUPABASE_URL", "")  # Hacer supabase_url opcional
     supabase_key: Optional[str] = os.getenv("SUPABASE_KEY", "")  # Hacer supabase_key opcional
+    supabase_admin_email: Optional[str] = os.getenv("SUPABASE_ADMIN_EMAIL", "admin@agency.com")
+    supabase_admin_password: Optional[str] = os.getenv("SUPABASE_ADMIN_PASSWORD", "admin123")
 
     # WhatsApp Business API
     whatsapp_api_token: Optional[str] = os.getenv("WHATSAPP_API_TOKEN", "")  # Hacer whatsapp_api_token opcional

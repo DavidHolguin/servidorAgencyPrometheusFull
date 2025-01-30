@@ -13,6 +13,7 @@ from app.core.admin.intent import (
     Intent
 )
 from app.core.database import Database
+from app.config.settings import get_settings
 
 class AdminChatbotManager:
     """Main class for handling administrative tasks through chatbot interface."""
@@ -22,6 +23,7 @@ class AdminChatbotManager:
         print("Inicializando AdminChatbotManager...")
         self.agency_id = agency_id
         self.user_id = user_id
+        self.settings = get_settings()
         
         # Initialize components
         self.conversation_state = ConversationState()
@@ -29,6 +31,17 @@ class AdminChatbotManager:
         self.response_generator = ResponseGenerator()
         self.db = Database()
         self.supabase = get_supabase_client()
+        
+        # Set RLS policies
+        if self.supabase:
+            try:
+                self.supabase.auth.sign_in_with_password({
+                    "email": self.settings.supabase_admin_email,
+                    "password": self.settings.supabase_admin_password
+                })
+                print("Autenticación con Supabase exitosa")
+            except Exception as e:
+                print(f"Error en la autenticación con Supabase: {str(e)}")
         
         # Load agency data
         self.agency_data = self._load_agency_data()
@@ -351,6 +364,21 @@ class AdminChatbotManager:
     async def _handle_chatbot_creation(self, message: str) -> AdminChatResponse:
         """Handle the creation of a new chatbot from user input."""
         try:
+            # Ensure we're authenticated
+            if not self.supabase.auth.get_session():
+                try:
+                    self.supabase.auth.sign_in_with_password({
+                        "email": self.settings.supabase_admin_email,
+                        "password": self.settings.supabase_admin_password
+                    })
+                    print("Re-autenticación con Supabase exitosa")
+                except Exception as e:
+                    print(f"Error en la re-autenticación con Supabase: {str(e)}")
+                    return AdminChatResponse(
+                        message="Error de autenticación. Por favor, contacte al administrador.",
+                        success=False
+                    )
+            
             # Parse the input message to extract chatbot information
             chatbot_data = {}
             
@@ -391,7 +419,7 @@ class AdminChatbotManager:
                     success=False
                 )
             
-            # Add default values
+            # Add default values and metadata
             chatbot_data['agency_id'] = self.agency_id
             chatbot_data['model_config'] = {
                 "model": "gpt-4-turbo-preview",
@@ -411,7 +439,7 @@ class AdminChatbotManager:
                 'is_active': True
             }
             
-            # Insert into database
+            # Insert into database with RLS
             response = self.supabase.table('chatbots').insert(data_to_insert).execute()
             created_chatbot = response.data[0] if response.data else None
             
