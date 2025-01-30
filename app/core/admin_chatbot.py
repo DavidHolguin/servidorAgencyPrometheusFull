@@ -256,7 +256,6 @@ class AdminChatbotManager:
                     "temperature": 0.7,
                     "max_tokens": 1000
                 }
-                chatbot_data['theme_color'] = "#007bff"
                 
                 # Create chatbot using schema
                 chatbot = ChatbotCreate(**chatbot_data)
@@ -311,7 +310,7 @@ class AdminChatbotManager:
                 new_value = ' '.join(parts[value_idx:])
                 
                 # Validate field name
-                valid_fields = ['name', 'description', 'welcome_message', 'context', 'model_config', 'theme_color']
+                valid_fields = ['name', 'description', 'welcome_message', 'context', 'model_config']
                 if field not in valid_fields:
                     return AdminChatResponse(
                         message=f"Campo inválido. Los campos válidos son: {', '.join(valid_fields)}",
@@ -399,7 +398,6 @@ class AdminChatbotManager:
                 "temperature": 0.7,
                 "max_tokens": 1000
             }
-            chatbot_data['theme_color'] = "#007bff"
             
             # Create chatbot using schema
             chatbot = ChatbotCreate(**chatbot_data)
@@ -428,8 +426,9 @@ class AdminChatbotManager:
             )
             
         except Exception as e:
+            self.conversation_state.clear_state()
             return AdminChatResponse(
-                message=f"Error al procesar la información del chatbot: {str(e)}. "
-                       "Por favor verifica el formato e intenta nuevamente.",
+                message=f"Error al crear el chatbot: {str(e)}. "
+                       "Por favor verifica la información e intenta nuevamente.",
                 success=False
             )
