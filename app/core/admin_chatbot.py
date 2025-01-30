@@ -122,19 +122,50 @@ class AdminChatbotManager:
             # Handle new intents
             if intent.type == IntentType.CREATE:
                 if intent.entity == EntityType.CHATBOT:
-                    # Start chatbot creation process
-                    required_fields = [
-                        "name",
-                        "description",
-                        "welcome_message",
-                        "context"
-                    ]
-                    self.conversation_state.start_process("create_chatbot", EntityType.CHATBOT, required_fields)
                     return AdminChatResponse(
-                        message="Vamos a crear un nuevo chatbot. Por favor, ingrese el nombre del chatbot:",
+                        message=("Por favor proporcione la siguiente información para crear el chatbot "
+                                "en este formato:\n\n"
+                                "Nombre: [nombre del chatbot]\n"
+                                "Descripción: [descripción del chatbot]\n"
+                                "Mensaje de bienvenida: [mensaje]\n"
+                                "Contexto: [instrucciones específicas]\n\n"
+                                "Por ejemplo:\n"
+                                "Nombre: Asistente de Viajes\n"
+                                "Descripción: Chatbot para ayudar a reservar viajes\n"
+                                "Mensaje de bienvenida: ¡Hola! Soy tu asistente de viajes\n"
+                                "Contexto: Ayudar a los usuarios a encontrar y reservar viajes"),
                         success=True
                     )
+            elif intent.type == IntentType.UPDATE:
+                if intent.entity == EntityType.CHATBOT:
+                    chatbots = await self.db.list_chatbots(self.agency_id)
+                    if not chatbots:
+                        return AdminChatResponse(
+                            message="No hay chatbots registrados para modificar.",
+                            success=True
+                        )
                     
+                    response_text = ("Los campos que puedes modificar son:\n\n"
+                                   "• name (Nombre del chatbot)\n"
+                                   "• description (Descripción)\n"
+                                   "• welcome_message (Mensaje de bienvenida)\n"
+                                   "• context (Contexto/instrucciones)\n"
+                                   "• model_config (Configuración del modelo)\n"
+                                   "• theme_color (Color del tema)\n\n"
+                                   "Chatbots disponibles:\n\n")
+                    
+                    for bot in chatbots:
+                        response_text += f"• {bot['name']}: {bot['description']}\n"
+                    
+                    response_text += ("\n¿Qué chatbot y qué campo deseas modificar? "
+                                    "Por favor responde en el formato: "
+                                    "'Modificar [nombre del chatbot] campo [nombre del campo] valor [nuevo valor]'")
+                    
+                    return AdminChatResponse(
+                        message=response_text,
+                        success=True,
+                        data={"chatbots": chatbots}
+                    )
             elif intent.type == IntentType.LIST:
                 if intent.entity == EntityType.CHATBOT:
                     chatbots = await self.db.list_chatbots(self.agency_id)
@@ -182,97 +213,130 @@ class AdminChatbotManager:
 
         # Handle chatbot creation process
         if self.conversation_state.active_process == "create_chatbot":
-            # If we're waiting for confirmation
-            if self.conversation_state.confirmation_pending:
-                if any(word in message.lower() for word in ["si", "sí", "yes"]):
-                    try:
-                        # Prepare chatbot data
-                        chatbot_data = self.conversation_state.collected_data.copy()
-                        chatbot_data['agency_id'] = self.agency_id
-                        
-                        # Add default values if not provided
-                        if 'model_config' not in chatbot_data:
-                            chatbot_data['model_config'] = {
-                                "model": "gpt-4-turbo-preview",
-                                "temperature": 0.7,
-                                "max_tokens": 1000
-                            }
-                        if 'theme_color' not in chatbot_data:
-                            chatbot_data['theme_color'] = "#007bff"
-                            
-                        # Create chatbot using schema
-                        chatbot = ChatbotCreate(**chatbot_data)
-                        
-                        # Add timestamp
-                        now = datetime.now().isoformat()
-                        data_to_insert = {
-                            **chatbot.model_dump(),
-                            'created_at': now,
-                            'updated_at': now,
-                            'is_active': True
-                        }
-                        
-                        # Insert into database
-                        response = self.supabase.table('chatbots').insert(data_to_insert).execute()
-                        created_chatbot = response.data[0] if response.data else None
-                        
-                        if not created_chatbot:
-                            raise Exception("No se pudo crear el chatbot")
-                        
-                        self.conversation_state.clear_state()
-                        return AdminChatResponse(
-                            message=f"¡Chatbot '{created_chatbot['name']}' creado exitosamente! ¿En qué más puedo ayudarte?",
-                            success=True,
-                            data={"chatbot": created_chatbot}
-                        )
-                    except Exception as e:
-                        self.conversation_state.clear_state()
-                        return AdminChatResponse(
-                            message=f"Error al crear el chatbot: {str(e)}",
-                            success=False
-                        )
-                elif any(word in message.lower() for word in ["no", "cancelar"]):
-                    self.conversation_state.clear_state()
-                    return AdminChatResponse(
-                        message="Proceso cancelado. ¿En qué más puedo ayudarte?",
-                        success=True
-                    )
-                else:
-                    return AdminChatResponse(
-                        message="Por favor confirme si desea crear el chatbot con los datos proporcionados (sí/no):",
-                        success=True
-                    )
-
-            # Handle data collection
-            if self.conversation_state.missing_fields:
-                current_field = self.conversation_state.missing_fields[0]
-                self.conversation_state.add_data(current_field, message)
+            try:
+                # Parse the input message to extract chatbot information
+                lines = message.split('\n')
+                chatbot_data = {}
                 
-                # If we have all required fields, ask for confirmation
-                if self.conversation_state.is_process_complete():
-                    self.conversation_state.confirmation_pending = True
-                    confirmation_message = "Por favor confirme los siguientes datos para el chatbot:\n\n"
-                    for field, value in self.conversation_state.collected_data.items():
-                        confirmation_message += f"• {field}: {value}\n"
-                    confirmation_message += "\n¿Desea crear el chatbot con estos datos? (sí/no):"
-                    
+                for line in lines:
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        
+                        if key == 'nombre':
+                            chatbot_data['name'] = value
+                        elif key == 'descripción':
+                            chatbot_data['description'] = value
+                        elif key == 'mensaje de bienvenida':
+                            chatbot_data['welcome_message'] = value
+                        elif key == 'contexto':
+                            chatbot_data['context'] = value
+                
+                # Validate required fields
+                required_fields = ['name', 'description', 'welcome_message', 'context']
+                missing_fields = [field for field in required_fields if field not in chatbot_data]
+                
+                if missing_fields:
                     return AdminChatResponse(
-                        message=confirmation_message,
-                        success=True
+                        message=f"Falta la siguiente información requerida: {', '.join(missing_fields)}. "
+                               "Por favor proporciona todos los campos necesarios.",
+                        success=False
                     )
                 
-                # Otherwise, ask for the next field
-                field_messages = {
-                    "name": "Por favor, ingrese el nombre del chatbot:",
-                    "description": "Por favor, ingrese una descripción del propósito del chatbot:",
-                    "welcome_message": "¿Cuál será el mensaje de bienvenida que mostrará el chatbot?",
-                    "context": "Por favor, proporcione el contexto o instrucciones específicas para el chatbot:"
+                # Add default values
+                chatbot_data['agency_id'] = self.agency_id
+                chatbot_data['model_config'] = {
+                    "model": "gpt-4-turbo-preview",
+                    "temperature": 0.7,
+                    "max_tokens": 1000
+                }
+                chatbot_data['theme_color'] = "#007bff"
+                
+                # Create chatbot using schema
+                chatbot = ChatbotCreate(**chatbot_data)
+                
+                # Add timestamp
+                now = datetime.now().isoformat()
+                data_to_insert = {
+                    **chatbot.model_dump(),
+                    'created_at': now,
+                    'updated_at': now,
+                    'is_active': True
                 }
                 
-                next_field = self.conversation_state.missing_fields[0]
+                # Insert into database
+                response = self.supabase.table('chatbots').insert(data_to_insert).execute()
+                created_chatbot = response.data[0] if response.data else None
+                
+                if not created_chatbot:
+                    raise Exception("No se pudo crear el chatbot")
+                
+                self.conversation_state.clear_state()
                 return AdminChatResponse(
-                    message=field_messages.get(next_field, f"Por favor, ingrese {next_field}:"),
-                    success=True
+                    message=f"¡Chatbot '{created_chatbot['name']}' creado exitosamente! ¿En qué más puedo ayudarte?",
+                    success=True,
+                    data={"chatbot": created_chatbot}
+                )
+                
+            except Exception as e:
+                return AdminChatResponse(
+                    message=f"Error al procesar la información del chatbot: {str(e)}. "
+                           "Por favor verifica el formato e intenta nuevamente.",
+                    success=False
+                )
+        
+        elif self.conversation_state.active_process == "update_chatbot":
+            try:
+                # Parse update command
+                parts = message.lower().split()
+                if len(parts) < 6 or 'modificar' not in parts or 'campo' not in parts or 'valor' not in parts:
+                    return AdminChatResponse(
+                        message="Formato incorrecto. Usa: 'Modificar [nombre del chatbot] campo [nombre del campo] valor [nuevo valor]'",
+                        success=False
+                    )
+                
+                # Extract chatbot name and field to update
+                bot_name_idx = parts.index('modificar') + 1
+                field_idx = parts.index('campo') + 1
+                value_idx = parts.index('valor') + 1
+                
+                bot_name = ' '.join(parts[bot_name_idx:parts.index('campo')])
+                field = parts[field_idx]
+                new_value = ' '.join(parts[value_idx:])
+                
+                # Validate field name
+                valid_fields = ['name', 'description', 'welcome_message', 'context', 'model_config', 'theme_color']
+                if field not in valid_fields:
+                    return AdminChatResponse(
+                        message=f"Campo inválido. Los campos válidos son: {', '.join(valid_fields)}",
+                        success=False
+                    )
+                
+                # Update chatbot in database
+                now = datetime.now().isoformat()
+                update_data = {
+                    field: new_value,
+                    'updated_at': now
+                }
+                
+                response = self.supabase.table('chatbots').update(update_data).eq('name', bot_name).execute()
+                updated_chatbot = response.data[0] if response.data else None
+                
+                if not updated_chatbot:
+                    raise Exception(f"No se encontró el chatbot '{bot_name}'")
+                
+                self.conversation_state.clear_state()
+                return AdminChatResponse(
+                    message=f"¡Chatbot '{bot_name}' actualizado exitosamente! Campo '{field}' modificado a '{new_value}'",
+                    success=True,
+                    data={"chatbot": updated_chatbot}
+                )
+                
+            except Exception as e:
+                return AdminChatResponse(
+                    message=f"Error al actualizar el chatbot: {str(e)}",
+                    success=False
                 )
 
         return AdminChatResponse(
