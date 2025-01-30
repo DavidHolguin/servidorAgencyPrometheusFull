@@ -6,11 +6,116 @@ from app.core.openai_client import client
 from app.core.supabase import supabase, get_supabase_client
 
 class ChatbotManager:
+    # Diccionario para mantener el estado de las conversaciones
+    _conversation_states = {}
+    
     def __init__(self, chatbot_id: str):
         self.chatbot_id = chatbot_id
         self.chatbot_data = self._load_chatbot_data()
         self.context = self._build_context()
         self.conversation_history = []
+
+    def _get_conversation_state(self, lead_id: str) -> dict:
+        """Obtiene el estado de una conversación específica"""
+        if not lead_id:
+            return {"started": False, "history": []}
+            
+        key = f"{self.chatbot_id}:{lead_id}"
+        if key not in self._conversation_states:
+            self._conversation_states[key] = {
+                "started": False,
+                "history": []
+            }
+        return self._conversation_states[key]
+
+    def _update_conversation_state(self, lead_id: str, state: dict):
+        """Actualiza el estado de una conversación específica"""
+        if lead_id:
+            key = f"{self.chatbot_id}:{lead_id}"
+            self._conversation_states[key] = state
+
+    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> Dict:
+        """Procesa un mensaje y retorna la respuesta"""
+        try:
+            print(f"Processing message for lead_id: {lead_id}")
+            
+            # Obtener el estado actual de la conversación
+            conv_state = self._get_conversation_state(lead_id)
+            print(f"Conversation state: {conv_state}")
+            
+            # Si es el primer mensaje de esta conversación
+            if not conv_state["started"]:
+                print("First message of conversation, sending welcome message")
+                conv_state["started"] = True
+                welcome_message = self.chatbot_data["welcome_message"]
+                conv_state["history"].append({"role": "assistant", "content": welcome_message})
+                
+                # Actualizar el estado
+                self._update_conversation_state(lead_id, conv_state)
+                
+                return {
+                    "response": welcome_message,
+                    "suggested_actions": [],
+                    "context": {
+                        "is_welcome": True,
+                        "chatbot_name": self.chatbot_data["name"]
+                    }
+                }
+            
+            print(f"Processing regular message: {message}")
+            
+            # Añadir el mensaje del usuario al historial
+            conv_state["history"].append({"role": "user", "content": message})
+            
+            # Construir mensajes para la API
+            messages = [{"role": "system", "content": self.context}]
+            
+            # Añadir historial reciente
+            recent_history = conv_state["history"][-10:] if len(conv_state["history"]) > 10 else conv_state["history"]
+            messages.extend(recent_history)
+            
+            print(f"Sending {len(messages)} messages to OpenAI")
+            
+            # Obtener la respuesta de OpenAI
+            response = await client.chat.completions.create(
+                model=self.chatbot_data["configuration"]["model"],
+                messages=messages,
+                temperature=self.chatbot_data["configuration"]["temperature"],
+                max_tokens=self.chatbot_data["configuration"]["max_tokens"],
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0
+            )
+            
+            # Procesar la respuesta
+            assistant_message = response.choices[0].message.content
+            conv_state["history"].append({"role": "assistant", "content": assistant_message})
+            
+            # Actualizar el estado
+            self._update_conversation_state(lead_id, conv_state)
+            
+            print(f"Generated response: {assistant_message[:100]}...")
+            
+            return {
+                "response": assistant_message,
+                "suggested_actions": [],
+                "context": {
+                    "conversation_length": len(conv_state["history"]),
+                    "chatbot_name": self.chatbot_data["name"],
+                    "personality": self.chatbot_data["personality"],
+                    "is_welcome": False
+                }
+            }
+            
+        except Exception as e:
+            print(f"Error processing message: {str(e)}")
+            return {
+                "response": "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
+                "suggested_actions": [],
+                "context": {
+                    "error": str(e)
+                }
+            }
 
     def _load_chatbot_data(self) -> Dict:
         """Carga la información del chatbot desde Supabase"""
@@ -49,7 +154,6 @@ class ChatbotManager:
             
         except Exception as e:
             print(f"Error loading chatbot data: {str(e)}")
-            # En desarrollo, usar datos mock
             if os.getenv("ENVIRONMENT") != "production":
                 print("Using mock data in development")
                 return {
@@ -125,64 +229,6 @@ class ChatbotManager:
         except Exception as e:
             print(f"Error building context: {str(e)}")
             return "Eres un asistente virtual para una agencia de viajes. Ayuda a los usuarios con sus consultas de manera profesional y clara."
-
-    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> Dict:
-        """Procesa un mensaje y retorna la respuesta"""
-        try:
-            # Si es el primer mensaje, usar el mensaje de bienvenida
-            if not lead_id or not self.conversation_history:
-                welcome_message = self.chatbot_data["welcome_message"]
-                self.conversation_history.append({"role": "assistant", "content": welcome_message})
-                return {
-                    "response": welcome_message,
-                    "suggested_actions": [],
-                    "context": {}
-                }
-            
-            # Añadir el mensaje del usuario al historial
-            self.conversation_history.append({"role": "user", "content": message})
-            
-            # Construir los mensajes para la API
-            messages = [
-                {"role": "system", "content": self.context}
-            ]
-            messages.extend(self.conversation_history[-10:])
-            
-            # Obtener la configuración
-            config = self.chatbot_data["configuration"]
-            
-            # Obtener la respuesta de OpenAI
-            response = await client.chat.completions.create(
-                model=config["model"],
-                messages=messages,
-                temperature=config["temperature"],
-                max_tokens=config["max_tokens"],
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0
-            )
-            
-            # Extraer y guardar la respuesta
-            assistant_message = response.choices[0].message.content
-            self.conversation_history.append({"role": "assistant", "content": assistant_message})
-            
-            return {
-                "response": assistant_message,
-                "suggested_actions": [],
-                "context": {
-                    "conversation_length": len(self.conversation_history),
-                    "chatbot_name": self.chatbot_data["name"],
-                    "personality": self.chatbot_data["personality"]
-                }
-            }
-            
-        except Exception as e:
-            print(f"Error processing message: {str(e)}")
-            return {
-                "response": "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
-                "suggested_actions": [],
-                "context": {}
-            }
 
     async def get_room_types(self, hotel_id: str) -> List[Dict]:
         """Obtiene los tipos de habitaciones de un hotel con sus detalles"""
