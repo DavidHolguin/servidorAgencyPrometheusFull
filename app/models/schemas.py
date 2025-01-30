@@ -69,46 +69,51 @@ class BookingRequest(BaseModel):
     """
     Modelo para solicitudes de reserva
     """
-    lead_id: str = Field(..., description="ID único del cliente potencial")
-    agency_id: str = Field(..., description="ID de la agencia que procesa la reserva")
-    booking_type: str = Field(..., description="Tipo de reserva (hotel, tour, paquete)")
-    items: List[BookingItem] = Field(..., description="Items incluidos en la reserva")
-    guest_info: GuestInfo = Field(..., description="Información del huésped principal")
-    check_in: Optional[datetime] = Field(None, description="Fecha y hora de entrada")
-    check_out: Optional[datetime] = Field(None, description="Fecha y hora de salida")
+    user_id: str = Field(..., description="ID único del usuario que realiza la reserva")
+    hotel_id: str = Field(..., description="ID del hotel")
+    room_type_id: str = Field(..., description="ID del tipo de habitación")
+    check_in: str = Field(..., description="Fecha de entrada (YYYY-MM-DD)")
+    check_out: str = Field(..., description="Fecha de salida (YYYY-MM-DD)")
+    guests_count: int = Field(..., description="Número de huéspedes")
     special_requests: Optional[str] = Field(None, description="Solicitudes especiales")
+
+class BookingResponse(BaseModel):
+    """
+    Modelo para respuestas de reserva
+    """
+    booking_id: str = Field(..., description="ID único de la reserva")
+    hotel_name: str = Field(..., description="Nombre del hotel")
+    room_type_name: str = Field(..., description="Nombre del tipo de habitación")
+    check_in: datetime = Field(..., description="Fecha y hora de entrada")
+    check_out: datetime = Field(..., description="Fecha y hora de salida")
+    guests_count: int = Field(..., description="Número de huéspedes")
+    status: str = Field(..., description="Estado de la reserva")
+    special_requests: Optional[str] = Field(None, description="Solicitudes especiales")
+    created_at: datetime = Field(..., description="Fecha y hora de creación de la reserva")
 
 class AvailabilityResponse(BaseModel):
     """
     Modelo para respuestas de disponibilidad
     """
-    available: bool = Field(..., description="Indica si hay disponibilidad")
-    rooms_available: int = Field(..., description="Número de habitaciones/items disponibles")
-    price_range: Dict[str, float] = Field(
-        ...,
-        description="Rango de precios disponibles (min y max)"
-    )
-    alternatives: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Alternativas disponibles si no hay disponibilidad en las fechas solicitadas"
-    )
+    hotel_name: str = Field(..., description="Nombre del hotel")
+    room_types: List[Dict[str, Any]] = Field(..., description="Lista de tipos de habitación con su disponibilidad")
+    check_in: str = Field(..., description="Fecha de entrada")
+    check_out: str = Field(..., description="Fecha de salida")
 
-class BookingResponse(BaseModel):
+class RoomTypeInfo(BaseModel):
     """
-    Modelo para respuestas de creación de reserva
+    Modelo para información detallada de tipos de habitación
     """
-    booking_id: str = Field(..., description="ID único de la reserva creada")
-    status: str = Field(..., description="Estado de la reserva")
-    total_amount: float = Field(..., description="Monto total de la reserva")
-    confirmation_code: str = Field(..., description="Código de confirmación")
-    payment_info: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Información de pago si aplica"
-    )
-    booking_details: Dict[str, Any] = Field(
-        ...,
-        description="Detalles completos de la reserva"
-    )
+    room_type_id: str = Field(..., description="ID único del tipo de habitación")
+    room_type_name: str = Field(..., description="Nombre del tipo de habitación")
+    room_type_description: str = Field(..., description="Descripción del tipo de habitación")
+    max_occupancy: int = Field(..., description="Ocupación máxima")
+    base_price: float = Field(..., description="Precio base por noche")
+    amenities: List[str] = Field(..., description="Lista de amenidades")
+    available_rooms: int = Field(..., description="Número de habitaciones disponibles")
+    total_rooms: int = Field(..., description="Número total de habitaciones")
+    gallery: Optional[Dict[str, Any]] = Field(None, description="Galería de imágenes")
+    cover_url: Optional[str] = Field(None, description="URL de la imagen principal")
 
 class RoomType(BaseModel):
     """

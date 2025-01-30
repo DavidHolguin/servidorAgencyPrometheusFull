@@ -35,19 +35,51 @@ async def send_message(
         print(f"Processing message for chatbot_id: {message.chatbot_id}")
         chatbot = ChatbotManager(message.chatbot_id)
         print(f"ChatbotManager initialized")
-        response = await chatbot.process_message(
+        
+        response_dict = await chatbot.process_message(
             message.message,
             message.lead_id,
             message.audio_content
         )
-        print(f"Message processed successfully")
-        return {"response": response}
+        print(f"Raw response from chatbot: {response_dict}")
+        
+        # Asegurarse de que tenemos un diccionario con la estructura correcta
+        if isinstance(response_dict, str):
+            response_dict = {
+                "response": response_dict,
+                "suggested_actions": [],
+                "context": {}
+            }
+        elif not isinstance(response_dict, dict):
+            response_dict = {
+                "response": str(response_dict),
+                "suggested_actions": [],
+                "context": {}
+            }
+        
+        # Construir la respuesta usando el modelo Pydantic
+        response = MessageResponse(
+            response=str(response_dict.get("response", "")),
+            suggested_actions=response_dict.get("suggested_actions", []),
+            context=response_dict.get("context", {})
+        )
+        print(f"Formatted response: {response.dict()}")
+        return response
+        
     except ValueError as ve:
         print(f"ValueError in send_message: {str(ve)}")
-        raise HTTPException(status_code=404, detail=str(ve))
+        return MessageResponse(
+            response=f"Error: {str(ve)}",
+            suggested_actions=[],
+            context={}
+        )
     except Exception as e:
         print(f"Error in send_message: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return MessageResponse(
+            response="Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
+            suggested_actions=[],
+            context={}
+        )
 
 @router.post(
     "/check-availability",

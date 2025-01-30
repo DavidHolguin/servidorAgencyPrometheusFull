@@ -10,123 +10,179 @@ class ChatbotManager:
         self.chatbot_id = chatbot_id
         self.chatbot_data = self._load_chatbot_data()
         self.context = self._build_context()
+        self.conversation_history = []
 
     def _load_chatbot_data(self) -> Dict:
         """Carga la información del chatbot desde Supabase"""
-        if not supabase:
-            print("Error: Supabase client is None")
-            # En desarrollo, usar datos mock si Supabase no está disponible
+        try:
+            if not supabase:
+                raise ValueError("Supabase client is not initialized")
+            
+            response = supabase.table("chatbots").select("*").eq("id", self.chatbot_id).execute()
+            if not response.data:
+                raise ValueError(f"No chatbot found with id {self.chatbot_id}")
+            
+            chatbot_data = response.data[0]
+            
+            # Asegurar que tenemos los campos mínimos necesarios
+            return {
+                "id": chatbot_data.get("id", self.chatbot_id),
+                "name": chatbot_data.get("name", "Assistant"),
+                "description": chatbot_data.get("description", ""),
+                "purpose": chatbot_data.get("purpose", "Asistente virtual"),
+                "welcome_message": chatbot_data.get("welcome_message", "¡Hola! ¿En qué puedo ayudarte?"),
+                "personality": chatbot_data.get("personality", {
+                    "tone": "profesional",
+                    "formality_level": "semiformal",
+                    "emoji_usage": "moderado",
+                    "language_style": "claro y conciso"
+                }),
+                "key_points": chatbot_data.get("key_points", []),
+                "special_instructions": chatbot_data.get("special_instructions", []),
+                "example_qa": chatbot_data.get("example_qa", []),
+                "configuration": chatbot_data.get("configuration", {
+                    "temperature": 0.7,
+                    "model": "gpt-4-turbo-preview",
+                    "max_tokens": 1000
+                })
+            }
+            
+        except Exception as e:
+            print(f"Error loading chatbot data: {str(e)}")
+            # En desarrollo, usar datos mock
             if os.getenv("ENVIRONMENT") != "production":
                 print("Using mock data in development")
                 return {
                     "id": self.chatbot_id,
-                    "name": "Development Chatbot",
-                    "description": "Chatbot for development",
-                    "initial_prompt": "You are a helpful travel assistant.",
-                    "context": "Default context for development",
-                    "agency_id": "agency_id",
-                    "system_prompt": "You are a travel assistant. Help users plan their trips and provide information about tourist destinations.",
-                    "max_turns": 10,
+                    "name": "Development Assistant",
+                    "description": "Development chatbot",
+                    "purpose": "Testing and development",
+                    "welcome_message": "¡Hola! Soy un chatbot de prueba.",
+                    "personality": {
+                        "tone": "profesional",
+                        "formality_level": "semiformal",
+                        "emoji_usage": "moderado",
+                        "language_style": "claro y conciso"
+                    },
+                    "key_points": ["Test point"],
+                    "special_instructions": ["Test instruction"],
+                    "example_qa": [{"question": "Test?", "answer": "Test answer"}],
                     "configuration": {
-                        "temperature": 0.7
+                        "temperature": 0.7,
+                        "model": "gpt-4-turbo-preview",
+                        "max_tokens": 1000
                     }
                 }
-            raise ValueError("Supabase client is not initialized")
-
-        try:
-            print(f"Attempting to fetch chatbot with ID: {self.chatbot_id}")
-            response = supabase.table('chatbots').select('*').eq('id', self.chatbot_id).execute()
-            print(f"Supabase response type: {type(response)}")
-            
-            # Handle different response types
-            if isinstance(response, dict):
-                data = response.get('data', [])
-            else:
-                data = getattr(response, 'data', [])
-            
-            print(f"Data from response: {data}")
-            
-            if not data:
-                print(f"No chatbot found with ID {self.chatbot_id}")
-                if os.getenv("ENVIRONMENT") != "production":
-                    return {
-                        "id": self.chatbot_id,
-                        "name": "Development Chatbot",
-                        "description": "Chatbot for development",
-                        "initial_prompt": "You are a helpful travel assistant.",
-                        "context": "Default context for development",
-                        "agency_id": "agency_id",
-                        "system_prompt": "You are a travel assistant. Help users plan their trips and provide information about tourist destinations.",
-                        "max_turns": 10,
-                        "configuration": {
-                            "temperature": 0.7
-                        }
-                    }
-                raise ValueError(f"Chatbot with ID {self.chatbot_id} not found")
-                
-            return data[0]
-        except Exception as e:
-            print(f"Error in _load_chatbot_data: {str(e)}")
-            if os.getenv("ENVIRONMENT") == "production":
-                raise Exception(f"Error loading chatbot data: {str(e)}")
-            # En desarrollo, usar datos mock
-            print("Using mock data due to error")
-            return {
-                "id": self.chatbot_id,
-                "name": "Development Chatbot",
-                "description": "Chatbot for development",
-                "initial_prompt": "You are a helpful travel assistant.",
-                "context": "Default context for development",
-                "agency_id": "agency_id",
-                "system_prompt": "You are a travel assistant. Help users plan their trips and provide information about tourist destinations.",
-                "max_turns": 10,
-                "configuration": {
-                    "temperature": 0.7
-                }
-            }
+            raise
 
     def _build_context(self) -> str:
         """Construye el contexto inicial del chatbot"""
         try:
-            agency_id = self.chatbot_data['agency_id']
+            personality = self.chatbot_data["personality"]
+            key_points = self.chatbot_data["key_points"]
+            special_instructions = self.chatbot_data["special_instructions"]
+            example_qa = self.chatbot_data["example_qa"]
             
-            # Obtener información de la agencia
-            agency = supabase.table('agencies').select('*').eq('id', agency_id).execute().data[0]
+            context_parts = [
+                f"Eres un asistente virtual para una agencia de viajes llamado {self.chatbot_data['name']}.",
+                f"Propósito: {self.chatbot_data['purpose']}",
+                "",
+                "PERSONALIDAD Y ESTILO DE COMUNICACIÓN:",
+                f"- Tono: {personality['tone']}",
+                f"- Nivel de formalidad: {personality['formality_level']}",
+                f"- Uso de emojis: {personality['emoji_usage']}",
+                f"- Estilo de lenguaje: {personality['language_style']}",
+                ""
+            ]
             
-            # Obtener hoteles con sus tipos de habitaciones y amenidades
-            hotels_query = supabase.table('hotels')\
-                .select('*, room_types(id, name, description, max_occupancy, base_price, amenities)')\
-                .eq('agency_id', agency_id)\
-                .execute()
-            hotels = hotels_query.data
+            if key_points:
+                context_parts.extend([
+                    "PUNTOS CLAVE A CONSIDERAR:",
+                    *[f"- {point}" for point in key_points],
+                    ""
+                ])
             
-            # Obtener paquetes
-            packages = supabase.table('packages').select('*').eq('agency_id', agency_id).execute().data
+            if special_instructions:
+                context_parts.extend([
+                    "INSTRUCCIONES ESPECIALES:",
+                    *[f"- {instruction}" for instruction in special_instructions],
+                    ""
+                ])
             
-            # Construir contexto base
-            context = f"""
-            You are a travel assistant for {agency['name']}.
-            Context: {self.chatbot_data.get('context', '')}
+            if example_qa:
+                context_parts.extend([
+                    "EJEMPLOS DE PREGUNTAS Y RESPUESTAS:",
+                    *[f"P: {qa['question']}\nR: {qa['answer']}" for qa in example_qa],
+                    ""
+                ])
             
-            Available Hotels and Room Types:
-            {json.dumps(hotels, indent=2)}
+            context_parts.append(
+                f"Recuerda mantener un tono {personality['tone']} y un nivel de formalidad {personality['formality_level']} en todas tus respuestas."
+            )
             
-            Available Packages:
-            {json.dumps(packages, indent=2)}
+            return "\n".join(context_parts)
             
-            Instructions:
-            - Always be helpful and professional
-            - You can provide detailed information about hotels, room types, costs, and amenities
-            - You can check room availability and make bookings
-            - You can process audio messages if they are provided
-            - If you need to create a booking, use the booking API
-            - When asked about room types, costs or amenities, use the data from the database
-            """
-            return context
         except Exception as e:
-            if os.getenv("ENVIRONMENT") == "production":
-                raise Exception(f"Error building context: {str(e)}")
-            return "You are a helpful travel assistant. This is a development context."
+            print(f"Error building context: {str(e)}")
+            return "Eres un asistente virtual para una agencia de viajes. Ayuda a los usuarios con sus consultas de manera profesional y clara."
+
+    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> Dict:
+        """Procesa un mensaje y retorna la respuesta"""
+        try:
+            # Si es el primer mensaje, usar el mensaje de bienvenida
+            if not lead_id or not self.conversation_history:
+                welcome_message = self.chatbot_data["welcome_message"]
+                self.conversation_history.append({"role": "assistant", "content": welcome_message})
+                return {
+                    "response": welcome_message,
+                    "suggested_actions": [],
+                    "context": {}
+                }
+            
+            # Añadir el mensaje del usuario al historial
+            self.conversation_history.append({"role": "user", "content": message})
+            
+            # Construir los mensajes para la API
+            messages = [
+                {"role": "system", "content": self.context}
+            ]
+            messages.extend(self.conversation_history[-10:])
+            
+            # Obtener la configuración
+            config = self.chatbot_data["configuration"]
+            
+            # Obtener la respuesta de OpenAI
+            response = await client.chat.completions.create(
+                model=config["model"],
+                messages=messages,
+                temperature=config["temperature"],
+                max_tokens=config["max_tokens"],
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0
+            )
+            
+            # Extraer y guardar la respuesta
+            assistant_message = response.choices[0].message.content
+            self.conversation_history.append({"role": "assistant", "content": assistant_message})
+            
+            return {
+                "response": assistant_message,
+                "suggested_actions": [],
+                "context": {
+                    "conversation_length": len(self.conversation_history),
+                    "chatbot_name": self.chatbot_data["name"],
+                    "personality": self.chatbot_data["personality"]
+                }
+            }
+            
+        except Exception as e:
+            print(f"Error processing message: {str(e)}")
+            return {
+                "response": "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
+                "suggested_actions": [],
+                "context": {}
+            }
 
     async def get_room_types(self, hotel_id: str) -> List[Dict]:
         """Obtiene los tipos de habitaciones de un hotel con sus detalles"""
@@ -153,86 +209,114 @@ class ChatbotManager:
             print(f"Error getting room details: {str(e)}")
             raise e
 
-    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> str:
-        """Procesa un mensaje y retorna la respuesta"""
-        
-        # Procesar audio si está presente
-        if audio_content:
-            # Aquí se procesaría el audio usando un servicio de STT
-            # Por ahora solo agregamos una nota en el mensaje
-            message = f"[Audio Message]: {message}"
-        
-        # Obtener historial de mensajes recientes si existe lead_id
-        messages = []
-        if lead_id:
-            recent_messages = supabase.table('chat_messages')\
-                .select('*')\
-                .eq('lead_id', lead_id)\
-                .order('created_at', desc=True)\
-                .limit(5)\
-                .execute().data
-                
-            for msg in reversed(recent_messages):
-                role = "assistant" if msg['is_bot'] else "user"
-                messages.append({"role": role, "content": msg['message']})
-
-        # Agregar contexto y mensaje actual
-        messages = [
-            {"role": "system", "content": self.context},
-            *messages,
-            {"role": "user", "content": message}
-        ]
-
-        # Obtener respuesta de ChatGPT
+    async def check_availability(self, hotel_id: str, check_in: str, check_out: str, room_type_id: Optional[str] = None) -> Dict:
+        """Verifica la disponibilidad de habitaciones para las fechas especificadas"""
         try:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=self.chatbot_data.get('configuration', {}).get('temperature', 0.7),
-                max_tokens=500,
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0
-            )
-            assistant_message = response.choices[0].message.content
+            # Convertir fechas a timestamp con zona horaria
+            check_in_ts = f"{check_in}T00:00:00+00:00"
+            check_out_ts = f"{check_out}T00:00:00+00:00"
+            
+            # Si no se especifica room_type_id, obtener disponibilidad de todos los tipos de habitación
+            if not room_type_id:
+                response = supabase.rpc(
+                    'get_hotel_rooms_complete_info',
+                    {
+                        'p_hotel_id': hotel_id,
+                        'p_check_in': check_in_ts,
+                        'p_check_out': check_out_ts
+                    }
+                ).execute()
+                return {
+                    'hotel_id': hotel_id,
+                    'check_in': check_in,
+                    'check_out': check_out,
+                    'room_types': response.data
+                }
+            else:
+                # Obtener disponibilidad para un tipo específico de habitación
+                response = supabase.rpc(
+                    'get_room_availability',
+                    {
+                        'p_room_type_id': room_type_id,
+                        'p_check_in': check_in_ts,
+                        'p_check_out': check_out_ts
+                    }
+                ).execute()
+                return {
+                    'hotel_id': hotel_id,
+                    'room_type_id': room_type_id,
+                    'check_in': check_in,
+                    'check_out': check_out,
+                    'availability': response.data[0]
+                }
         except Exception as e:
-            print(f"Error calling OpenAI API: {str(e)}")
+            print(f"Error checking availability: {str(e)}")
             raise e
-
-        # Guardar mensaje en la base de datos si existe lead_id
-        if lead_id:
-            # Guardar mensaje del usuario
-            supabase.table('chat_messages').insert([{
-                'chatbot_id': self.chatbot_id,
-                'lead_id': lead_id,
-                'message': message,
-                'is_bot': False,
-                'metadata': {'has_audio': bool(audio_content)}
-            }]).execute()
-
-            # Guardar respuesta del chatbot
-            supabase.table('chat_messages').insert([{
-                'chatbot_id': self.chatbot_id,
-                'lead_id': lead_id,
-                'message': assistant_message,
-                'is_bot': True,
-                'metadata': {}
-            }]).execute()
-
-        return assistant_message
-
-    async def check_availability(self, hotel_id: str, check_in: str, check_out: str) -> Dict:
-        """Verifica la disponibilidad de habitaciones"""
-        query = supabase.rpc(
-            'check_room_availability',
-            {'p_room_type_id': hotel_id, 'p_check_in': check_in, 'p_check_out': check_out}
-        ).execute()
-        return query.data
 
     async def create_booking(self, booking_data: Dict) -> Dict:
         """Crea una nueva reserva"""
-        response = supabase.rpc(
-            'create_booking',
-            booking_data
-        ).execute()
-        return response.data
+        try:
+            response = supabase.rpc(
+                'create_booking',
+                {
+                    'p_user_id': booking_data['user_id'],
+                    'p_hotel_id': booking_data['hotel_id'],
+                    'p_room_type_id': booking_data['room_type_id'],
+                    'p_check_in': f"{booking_data['check_in']}T00:00:00+00:00",
+                    'p_check_out': f"{booking_data['check_out']}T00:00:00+00:00",
+                    'p_guests_count': booking_data['guests_count'],
+                    'p_special_requests': booking_data.get('special_requests')
+                }
+            ).execute()
+            
+            # Obtener detalles de la reserva creada
+            booking_details = await self.get_booking(response.data[0])
+            return booking_details
+        except Exception as e:
+            print(f"Error creating booking: {str(e)}")
+            raise e
+
+    async def get_booking(self, booking_id: str) -> Dict:
+        """Obtiene los detalles de una reserva"""
+        try:
+            response = supabase.rpc(
+                'get_booking_details',
+                {'p_booking_id': booking_id}
+            ).execute()
+            
+            if not response.data:
+                raise ValueError(f"Booking with ID {booking_id} not found")
+                
+            return response.data[0]
+        except Exception as e:
+            print(f"Error getting booking details: {str(e)}")
+            raise e
+
+    async def cancel_booking(self, booking_id: str, user_id: str) -> bool:
+        """Cancela una reserva existente"""
+        try:
+            response = supabase.rpc(
+                'cancel_booking',
+                {
+                    'p_booking_id': booking_id,
+                    'p_user_id': user_id
+                }
+            ).execute()
+            
+            return response.data[0]
+        except Exception as e:
+            print(f"Error canceling booking: {str(e)}")
+            raise e
+
+    async def get_user_bookings(self, user_id: str) -> List[Dict]:
+        """Obtiene todas las reservas de un usuario"""
+        try:
+            response = supabase.rpc(
+                'get_user_bookings',
+                {'p_user_id': user_id}
+            ).execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"Error getting user bookings: {str(e)}")
+            raise e

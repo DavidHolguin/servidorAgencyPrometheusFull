@@ -7,15 +7,43 @@ class ChatbotManager(BaseAssetManager):
     """Manejador de operaciones CRUD para chatbots"""
     
     STEPS = {
-        "CREATE": ["name", "description", "icon", "confirmation"],
-        "EDIT": ["select", "name", "description", "icon", "confirmation"],
+        "CREATE": [
+            "name",
+            "description",
+            "purpose",
+            "welcome_message",
+            "personality_tone",
+            "personality_formality",
+            "personality_emoji",
+            "key_points",
+            "special_instructions",
+            "example_qa",
+            "icon",
+            "confirmation"
+        ],
+        "EDIT": [
+            "select",
+            "name",
+            "description",
+            "purpose",
+            "welcome_message",
+            "personality_tone",
+            "personality_formality",
+            "personality_emoji",
+            "key_points",
+            "special_instructions",
+            "example_qa",
+            "icon",
+            "confirmation"
+        ],
         "DELETE": ["select", "confirmation"]
     }
     
     def __init__(self, agency_id: str):
         super().__init__(agency_id)
         self.operation = None
-        
+        self.form_data = {}
+    
     async def start_operation(self, operation: str) -> AdminChatResponse:
         """Inicia una operación CRUD"""
         self.operation = operation
@@ -70,13 +98,12 @@ class ChatbotManager(BaseAssetManager):
         is_valid, error = await self.validate_input(step, message)
         if not is_valid:
             return AdminChatResponse(message=error)
-            
+        
         # Guardar dato actual
         self.form_data[step] = message
         
         # Obtener siguiente paso
-        current_steps = self.STEPS[self.operation]
-        current_index = current_steps.index(step)
+        next_step = self._get_next_step(step)
         
         # Si es el último paso, procesar confirmación
         if step == "confirmation":
@@ -87,102 +114,136 @@ class ChatbotManager(BaseAssetManager):
                     message=result,
                     action_required=False
                 )
-            elif message.lower() in ['no']:
+            else:
                 self.reset()
                 return AdminChatResponse(
-                    message="❌ Operación cancelada. ¿En qué más puedo ayudarle?",
+                    message="Operación cancelada",
                     action_required=False
                 )
-            else:
-                return AdminChatResponse(
-                    message="Por favor responda 'si' o 'no'.",
-                    components=[self.get_confirmation_component("chatbot", "¿Confirmar operación?")]
-                )
-                
-        # Si hay más pasos, continuar al siguiente
-        if current_index < len(current_steps) - 1:
-            next_step = current_steps[current_index + 1]
-            self.current_step = next_step
-            
-            if next_step == "description":
-                return AdminChatResponse(
-                    message="Descripción del chatbot:",
-                    components=[self.get_text_input_component("chatbot", "Descripción")]
-                )
-            elif next_step == "icon":
-                return AdminChatResponse(
-                    message="¿Desea agregar un ícono? (opcional)",
-                    components=[
-                        UIComponent(
-                            type=UIComponentType.FILE_INPUT,
-                            id="chatbot_icon",
-                            label="Ícono",
-                            required=False,
-                            validation={
-                                "accept": "image/*",
-                                "maxSize": 2097152
-                            }
-                        ).dict()
-                    ]
-                )
-            elif next_step == "confirmation":
-                operation_name = "crear" if self.operation == "CREATE" else "editar" if self.operation == "EDIT" else "eliminar"
-                message = f"¿Desea {operation_name} el chatbot con los siguientes datos?\n\n"
-                
-                if self.operation != "DELETE":
-                    message += f"""Nombre: {self.form_data.get('name', '')}
-Descripción: {self.form_data.get('description', '')}
-Ícono: {'Sí' if self.form_data.get('icon') else 'No'}"""
-                else:
-                    chatbots = await self._get_chatbots()
-                    chatbot = next((c for c in chatbots if str(c["id"]) == self.form_data["select"]), None)
-                    if chatbot:
-                        message += f"Chatbot: {chatbot['name']}"
-                
-                return AdminChatResponse(
-                    message=message,
-                    components=[self.get_confirmation_component("chatbot", f"¿{operation_name.capitalize()} chatbot?")]
-                )
-                
-        return AdminChatResponse(
-            message="Ha ocurrido un error en el proceso. Por favor, intente nuevamente."
-        )
         
-    async def save_data(self) -> tuple[bool, str]:
-        """Guarda los datos del formulario"""
+        # Preparar el siguiente paso
+        return self._prepare_step_response(next_step)
+    
+    def _prepare_step_response(self, step: str) -> AdminChatResponse:
+        """Prepara la respuesta para el siguiente paso"""
+        prompts = {
+            "name": "Nombre del chatbot:",
+            "description": "Descripción del chatbot:",
+            "purpose": "¿Cuál es el propósito principal del chatbot? (ej: ventas, soporte, información)",
+            "welcome_message": "Mensaje de bienvenida para los usuarios:",
+            "personality_tone": "Selecciona el tono de comunicación:",
+            "personality_formality": "Nivel de formalidad:",
+            "personality_emoji": "Uso de emojis:",
+            "key_points": "Ingresa los puntos clave que el chatbot debe considerar (uno por línea):",
+            "special_instructions": "Instrucciones especiales para el chatbot (una por línea):",
+            "example_qa": "Ejemplos de preguntas y respuestas (formato: P: pregunta | R: respuesta):",
+            "icon": "URL del ícono del chatbot (opcional):",
+            "confirmation": "¿Confirmas la creación del chatbot? (si/no)"
+        }
+        
+        components = []
+        if step == "personality_tone":
+            components = [
+                self.get_select_component("tone", "Tono", [
+                    {"value": "profesional", "label": "Profesional"},
+                    {"value": "amigable", "label": "Amigable"},
+                    {"value": "casual", "label": "Casual"},
+                    {"value": "formal", "label": "Formal"}
+                ])
+            ]
+        elif step == "personality_formality":
+            components = [
+                self.get_select_component("formality", "Formalidad", [
+                    {"value": "muy_formal", "label": "Muy Formal"},
+                    {"value": "formal", "label": "Formal"},
+                    {"value": "semiformal", "label": "Semi-formal"},
+                    {"value": "informal", "label": "Informal"}
+                ])
+            ]
+        elif step == "personality_emoji":
+            components = [
+                self.get_select_component("emoji", "Uso de Emojis", [
+                    {"value": "ninguno", "label": "Sin emojis"},
+                    {"value": "moderado", "label": "Uso moderado"},
+                    {"value": "frecuente", "label": "Uso frecuente"}
+                ])
+            ]
+        else:
+            components = [self.get_text_input_component(step, prompts[step])]
+        
+        return AdminChatResponse(
+            message=prompts[step],
+            components=components
+        )
+    
+    async def save_data(self) -> Tuple[bool, str]:
+        """Guarda los datos del chatbot"""
         try:
-            if self.operation == "CREATE":
-                chatbot_data = {
-                    "agency_id": self.agency_id,
-                    "name": self.form_data["name"],
-                    "description": self.form_data["description"],
-                    "icon_url": self.form_data.get("icon"),
-                    "configuration": {
-                        "welcome_message": f"¡Hola! Soy {self.form_data['name']}, ¿en qué puedo ayudarte?"
-                    }
-                }
-                
-                response = self.supabase.table("chatbots").insert(chatbot_data).execute()
-                return True, "✅ Chatbot creado exitosamente. ¿En qué más puedo ayudarle?"
-                
-            elif self.operation == "EDIT":
-                chatbot_data = {
-                    "name": self.form_data["name"],
-                    "description": self.form_data["description"],
-                    "icon_url": self.form_data.get("icon")
-                }
-                
-                response = self.supabase.table("chatbots").update(chatbot_data).eq("id", int(self.form_data["select"])).execute()
-                return True, "✅ Chatbot actualizado exitosamente. ¿En qué más puedo ayudarle?"
-                
-            elif self.operation == "DELETE":
-                response = self.supabase.table("chatbots").delete().eq("id", int(self.form_data["select"])).execute()
-                return True, "✅ Chatbot eliminado exitosamente. ¿En qué más puedo ayudarle?"
-                
-        except Exception as e:
-            print(f"Error al guardar chatbot: {str(e)}")
-            return False, "❌ Ha ocurrido un error al procesar la operación. Por favor, intente nuevamente."
+            # Construir la personalidad
+            personality = {
+                "tone": self.form_data.get("personality_tone"),
+                "formality_level": self.form_data.get("personality_formality"),
+                "emoji_usage": self.form_data.get("personality_emoji"),
+                "language_style": "claro y conciso"
+            }
             
+            # Procesar puntos clave y ejemplos
+            key_points = [point.strip() for point in self.form_data.get("key_points", "").split("\n") if point.strip()]
+            special_instructions = [instr.strip() for instr in self.form_data.get("special_instructions", "").split("\n") if instr.strip()]
+            
+            # Procesar ejemplos Q&A
+            example_qa = []
+            for line in self.form_data.get("example_qa", "").split("\n"):
+                if "|" in line:
+                    q, a = line.split("|")
+                    q = q.replace("P:", "").strip()
+                    a = a.replace("R:", "").strip()
+                    if q and a:
+                        example_qa.append({"question": q, "answer": a})
+            
+            # Crear el objeto chatbot
+            chatbot_data = {
+                "name": self.form_data.get("name"),
+                "description": self.form_data.get("description"),
+                "purpose": self.form_data.get("purpose"),
+                "welcome_message": self.form_data.get("welcome_message"),
+                "personality": personality,
+                "key_points": key_points,
+                "special_instructions": special_instructions,
+                "example_qa": example_qa,
+                "icon_url": self.form_data.get("icon"),
+                "agency_id": self.agency_id,
+                "configuration": {
+                    "temperature": 0.7,
+                    "model": "gpt-4-turbo-preview",
+                    "max_tokens": 1000
+                },
+                "response_weights": {
+                    "key_points_weight": 0.3,
+                    "example_qa_weight": 0.4,
+                    "special_instructions_weight": 0.5
+                }
+            }
+            
+            if self.operation == "CREATE":
+                result = await self.db.create_chatbot(chatbot_data)
+            else:
+                result = await self.db.update_chatbot(self.form_data["select"], chatbot_data)
+            
+            return True, f"Chatbot {'creado' if self.operation == 'CREATE' else 'actualizado'} exitosamente"
+            
+        except Exception as e:
+            print(f"Error saving chatbot: {str(e)}")
+            return False, f"Error al {'crear' if self.operation == 'CREATE' else 'actualizar'} el chatbot"
+    
+    def _get_next_step(self, current_step: str) -> str:
+        """Obtiene el siguiente paso en el proceso"""
+        steps = self.STEPS[self.operation]
+        current_index = steps.index(current_step)
+        if current_index < len(steps) - 1:
+            return steps[current_index + 1]
+        return "confirmation"
+
     async def _get_chatbots(self) -> List[Dict]:
         """Obtiene la lista de chatbots disponibles"""
         try:
