@@ -13,7 +13,6 @@ class ChatbotBase(BaseModel):
         "temperature": 0.7,
         "max_tokens": 1000
     }
-    theme_color: Optional[str] = "#007bff"
     icon_url: Optional[str] = None
     agency_id: str
 

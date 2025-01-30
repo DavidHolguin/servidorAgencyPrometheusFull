@@ -156,7 +156,7 @@ class AdminChatbotManager:
                                    "• welcome_message (Mensaje de bienvenida)\n"
                                    "• context (Contexto/instrucciones)\n"
                                    "• model_config (Configuración del modelo)\n"
-                                   "• theme_color (Color del tema)\n\n"
+                                   "• icon_url (URL del ícono)\n\n"
                                    "Chatbots disponibles:\n\n")
                     
                     for bot in chatbots:
@@ -310,7 +310,7 @@ class AdminChatbotManager:
                 new_value = ' '.join(parts[value_idx:])
                 
                 # Validate field name
-                valid_fields = ['name', 'description', 'welcome_message', 'context', 'model_config']
+                valid_fields = ['name', 'description', 'welcome_message', 'context', 'model_config', 'icon_url']
                 if field not in valid_fields:
                     return AdminChatResponse(
                         message=f"Campo inválido. Los campos válidos son: {', '.join(valid_fields)}",
