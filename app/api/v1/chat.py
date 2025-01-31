@@ -4,7 +4,7 @@ from typing import Optional
 import logging
 from datetime import datetime
 
-from app.core.chatbot import ChatbotManager
+from app.core.enhanced_chatbot import EnhancedChatbotManager
 from app.core.state import get_active_chatbots, active_chatbots
 from app.models.schemas import (
     AvailabilityResponse, 
@@ -17,6 +17,15 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Almacén de instancias de chatbot
+chatbot_instances = {}
+
+def get_chatbot(chatbot_id: str) -> EnhancedChatbotManager:
+    """Obtiene o crea una instancia de chatbot"""
+    if chatbot_id not in chatbot_instances:
+        chatbot_instances[chatbot_id] = EnhancedChatbotManager(chatbot_id)
+    return chatbot_instances[chatbot_id]
+
 @router.post("/send-message")
 async def send_message(
     chatbot_id: str = Query(..., description="ID del chatbot"),
@@ -26,42 +35,41 @@ async def send_message(
 ):
     """
     Envía un mensaje al chatbot y obtiene una respuesta
+    
+    Args:
+        chatbot_id: ID del chatbot
+        message: Mensaje del usuario
+        lead_id: ID opcional del lead/usuario
+        channel: Canal de comunicación (web, whatsapp, etc.)
+        
+    Returns:
+        Dict con la respuesta del chatbot y metadatos
     """
     try:
-        logger.info(f"Processing message for chatbot_id: {chatbot_id}")
+        # Obtener instancia del chatbot
+        chatbot = get_chatbot(chatbot_id)
         
-        # Obtener o crear instancia del chatbot
-        chatbot = active_chatbots.get(chatbot_id)
-        
-        if not chatbot:
-            chatbot = ChatbotManager(chatbot_id)
-            await chatbot.initialize()
-            active_chatbots[chatbot_id] = chatbot
-            logger.info("ChatbotManager initialized")
-
         # Procesar mensaje
-        response_dict = await chatbot.process_message(
-            message=message,
-            lead_id=lead_id
-        )
+        response = await chatbot.process_message(message, lead_id)
         
-        logger.info(f"Raw response from chatbot: {response_dict}")
-
+        logger.info(f"Raw response from chatbot: {response}")
+        
         # Formatear respuesta
         formatted_response = {
-            "response": response_dict.get("response", "Lo siento, no pude procesar tu mensaje."),
-            "suggested_actions": response_dict.get("suggested_actions", []),
-            "context": response_dict.get("context", {})
+            "response": response["response"],
+            "suggested_actions": response["suggested_actions"],
+            "context": response["context"]
         }
         
         logger.info(f"Formatted response: {formatted_response}")
+        
         return formatted_response
-
+        
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing message: {str(e)}"
+            detail="Error processing message"
         )
 
 @router.post(
@@ -90,7 +98,7 @@ async def check_availability(
         HTTPException: Error 500 si hay un problema verificando la disponibilidad
     """
     try:
-        chatbot = ChatbotManager(hotel_id)
+        chatbot = get_chatbot(hotel_id)
         availability = await chatbot.check_availability(hotel_id, check_in, check_out)
         return availability
     except Exception as e:
@@ -125,7 +133,7 @@ async def create_booking(
         HTTPException: Error 500 si hay un problema creando la reserva
     """
     try:
-        chatbot = ChatbotManager(booking.agency_id)
+        chatbot = get_chatbot(booking.agency_id)
         result = await chatbot.create_booking(booking.dict())
         return result
     except Exception as e:
@@ -155,7 +163,7 @@ async def get_room_types(
         HTTPException: Error 404 si no se encuentra el hotel o 500 si hay un error del servidor
     """
     try:
-        chatbot = ChatbotManager(chatbot_id)
+        chatbot = get_chatbot(chatbot_id)
         room_types = await chatbot.get_room_types(hotel_id)
         return {
             "room_types": room_types,
@@ -192,7 +200,7 @@ async def get_room_type_details(
         HTTPException: Error 404 si no se encuentra el tipo de habitación o 500 si hay un error del servidor
     """
     try:
-        chatbot = ChatbotManager(chatbot_id)
+        chatbot = get_chatbot(chatbot_id)
         room_details = await chatbot.get_room_details(room_type_id)
         if not room_details:
             raise ValueError(f"Room type {room_type_id} not found")
