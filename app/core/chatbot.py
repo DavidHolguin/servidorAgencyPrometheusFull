@@ -1,13 +1,14 @@
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
 import logging
 import re
 
 from app.core.openai_client import openai_client
 from app.core.supabase_client import get_client
+from app.core.response_enricher import ResponseEnricher
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ChatbotManager:
             "frequency_penalty": 0.6,
         }
         self.supabase = get_client()
+        self.response_enricher = ResponseEnricher()
 
     async def initialize(self):
         """Inicializa el chatbot cargando su configuración desde la base de datos"""
@@ -126,14 +128,60 @@ class ChatbotManager:
 
     async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> Dict:
         """Procesa un mensaje y genera una respuesta"""
-        cleanup_required = False
         try:
             start_time = time.time()
             
             # Obtener estado de conversación
             conv_state = await self._get_conversation_state_async(lead_id)
             
-            # Verificar respuestas rápidas
+            # Detectar si es una solicitud de imágenes/fotos
+            image_keywords = [
+                "foto", "fotos", "imagen", "imágenes", "imagenes", 
+                "ver foto", "ver fotos", "muestra", "enseña", "mostrar"
+            ]
+            
+            is_image_request = any(keyword in message.lower() for keyword in image_keywords)
+            
+            if is_image_request:
+                # Extraer el tipo de habitación mencionado
+                room_types = {
+                    "casa árbol": "casa_arbol",
+                    "casa del árbol": "casa_arbol",
+                    "presidencial": "presidencial",
+                    "cacique": "cacique",
+                    "quimbaya": "quimbaya",
+                    "familiar": "familiar"
+                }
+                
+                requested_room = None
+                for room_name in room_types:
+                    if room_name in message.lower():
+                        requested_room = room_types[room_name]
+                        break
+                
+                # Consultar imágenes de la habitación
+                availability = await self.check_availability(
+                    self.chatbot_id,
+                    datetime.now().strftime("%Y-%m-%d"),
+                    (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+                    room_type_id=requested_room
+                )
+                
+                return {
+                    "response": availability["markdown_response"],
+                    "metadata": {
+                        "type": "image_response",
+                        "data": availability
+                    },
+                    "suggested_actions": [
+                        {"type": "button", "text": "Reservar ahora"},
+                        {"type": "button", "text": "Ver más detalles"},
+                        {"type": "button", "text": "Ver otras habitaciones"}
+                    ],
+                    "context": conv_state
+                }
+            
+            # Verificar respuestas rápidas (solo si no es solicitud de imágenes)
             quick_response = self._check_quick_questions(message)
             if quick_response:
                 return {
@@ -141,81 +189,91 @@ class ChatbotManager:
                     "suggested_actions": self._get_suggested_actions(quick_response),
                     "context": conv_state
                 }
+
+            # Detectar intención de consultar disponibilidad
+            availability_keywords = [
+                "disponibilidad", "habitaciones disponibles", "cuartos disponibles",
+                "hay habitaciones", "tienen habitaciones", "busco habitación",
+                "quiero reservar", "hacer una reserva"
+            ]
             
-            # Obtener memoria relevante
-            try:
-                relevant_memory = await self._get_relevant_memory(message, conv_state)
-            except asyncio.CancelledError:
-                cleanup_required = True
-                raise
-            except Exception as e:
-                logger.error(f"Error getting relevant memory: {str(e)}")
-                relevant_memory = {}
-
-            # Preparar mensajes
-            messages = self._prepare_messages_optimized(
-                message,
-                conv_state,
-                relevant_memory
-            )
-
-            # Generar respuesta usando streaming
-            full_response = ""
-            try:
-                async for chunk in openai_client.stream_response(
-                    messages=messages,
-                    config=self.model_config
-                ):
-                    if asyncio.current_task().cancelled():
-                        cleanup_required = True
-                        raise asyncio.CancelledError()
-                    full_response += chunk
-            except asyncio.CancelledError:
-                cleanup_required = True
-                raise
-            except Exception as e:
-                logger.error(f"Error in stream_response: {str(e)}")
+            is_availability_query = any(keyword in message.lower() for keyword in availability_keywords)
+            
+            if is_availability_query:
+                dates = self._extract_dates_from_message(message)
+                if not dates:
+                    return {
+                        "response": "¿Para qué fechas te gustaría consultar la disponibilidad?",
+                        "suggested_actions": [
+                            {"type": "date_picker", "text": "Seleccionar fechas"}
+                        ],
+                        "context": conv_state
+                    }
+                
+                availability = await self.check_availability(
+                    self.chatbot_id,
+                    dates["check_in"],
+                    dates["check_out"]
+                )
+                
                 return {
-                    "response": "Lo siento, ha ocurrido un error al generar la respuesta.",
-                    "suggested_actions": [],
+                    "response": availability["markdown_response"],
+                    "metadata": {
+                        "type": "availability_response",
+                        "data": availability
+                    },
+                    "suggested_actions": [
+                        {"type": "button", "text": "Reservar ahora"},
+                        {"type": "button", "text": "Ver más detalles"},
+                        {"type": "button", "text": "Consultar otras fechas"}
+                    ],
                     "context": conv_state
                 }
 
+            # Obtener memoria relevante y generar respuesta
+            relevant_memory = await self._get_relevant_memory(message, conv_state)
+            messages = self._prepare_messages_optimized(message, conv_state, relevant_memory)
+            
+            full_response = ""
+            async for chunk in openai_client.stream_response(
+                messages=messages,
+                config=self.model_config
+            ):
+                full_response += chunk
+
             # Actualizar estado y memoria
-            try:
-                await self._update_conversation_and_memory(lead_id, message, full_response)
-            except asyncio.CancelledError:
-                cleanup_required = True
-                raise
-            except Exception as e:
-                logger.error(f"Error updating conversation and memory: {str(e)}")
-
-            # Procesar acciones sugeridas
-            suggested_actions = self._get_suggested_actions(full_response)
-
-            # Registrar métricas de rendimiento
-            try:
-                await self._log_performance_metrics(time.time() - start_time, len(message))
-            except Exception as e:
-                logger.error(f"Error logging performance metrics: {str(e)}")
+            await self._update_conversation_and_memory(lead_id, message, full_response)
+            
+            # Registrar métricas
+            processing_time = time.time() - start_time
+            await self._log_performance_metrics(processing_time, len(message))
 
             return {
                 "response": full_response,
-                "suggested_actions": suggested_actions,
+                "suggested_actions": self._get_suggested_actions(full_response),
                 "context": conv_state
             }
 
-        except asyncio.CancelledError:
-            if cleanup_required:
-                await self.cleanup()
-            raise
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             return {
-                "response": "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
+                "response": "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente.",
                 "suggested_actions": [],
-                "context": {}
+                "context": conv_state
             }
+
+    def _extract_dates_from_message(self, message: str) -> Optional[Dict[str, str]]:
+        """Extrae fechas de check-in y check-out del mensaje usando procesamiento de lenguaje natural"""
+        try:
+            # Aquí implementarías la lógica de extracción de fechas
+            # Por ahora usamos fechas de ejemplo
+            return {
+                "check_in": "2025-02-01",
+                "check_out": "2025-02-05"
+            }
+        except Exception as e:
+            logger.error(f"Error extracting dates: {str(e)}")
+            return None
 
     async def cleanup(self):
         """Limpia recursos y realiza tareas de cierre"""
@@ -508,3 +566,168 @@ class ChatbotManager:
         except Exception as e:
             logger.error(f"Error getting suggested actions: {str(e)}")
             return []
+
+    async def check_availability(
+        self,
+        hotel_id: str,
+        check_in: str,
+        check_out: str,
+        room_type_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Verifica disponibilidad de habitaciones y retorna respuesta enriquecida"""
+        try:
+            # Convertir fechas
+            check_in_date = datetime.strptime(check_in, "%Y-%m-%d")
+            check_out_date = datetime.strptime(check_out, "%Y-%m-%d")
+            
+            # Consultar habitaciones disponibles con imágenes
+            query = self.supabase.table("room_types") \
+                .select("*, room_type_amenities(amenity:amenities(*)), room_type_images(image_url, description)") \
+                .eq("hotel_id", hotel_id)
+                
+            if room_type_id:
+                query = query.eq("id", room_type_id)
+                
+            rooms = query.execute()
+            
+            # Verificar disponibilidad real consultando reservas existentes
+            available_rooms = []
+            for room in rooms.data:
+                # Consultar reservas existentes para estas fechas
+                bookings = self.supabase.table("bookings") \
+                    .select("*") \
+                    .eq("hotel_id", hotel_id) \
+                    .eq("room_type_id", room["id"]) \
+                    .lte("check_in", check_out) \
+                    .gte("check_out", check_in) \
+                    .execute()
+                
+                # Si no hay reservas que se superpongan, la habitación está disponible
+                if not bookings.data:
+                    # Procesar imágenes
+                    room_images = []
+                    if room.get("room_type_images"):
+                        for image in room["room_type_images"]:
+                            if image.get("image_url"):
+                                room_images.append({
+                                    "url": image["image_url"],
+                                    "description": image.get("description", "")
+                                })
+                    
+                    # Procesar amenities
+                    amenities = []
+                    if room.get("room_type_amenities"):
+                        for amenity_rel in room["room_type_amenities"]:
+                            if amenity_rel.get("amenity"):
+                                amenities.append(amenity_rel["amenity"])
+                    
+                    available_rooms.append({
+                        **room,
+                        "images": room_images,
+                        "amenities": amenities
+                    })
+            
+            # Preparar respuesta en markdown con imágenes
+            markdown_response = "### Habitaciones Disponibles\n\n"
+            for room in available_rooms:
+                markdown_response += f"#### {room['name']}\n"
+                markdown_response += f"Precio: ${room['price_per_night']} por noche\n\n"
+                
+                if room.get("images"):
+                    markdown_response += "**Imágenes:**\n"
+                    for image in room["images"]:
+                        markdown_response += f"![{image.get('description', 'Habitación')}]({image['url']})\n"
+                
+                if room.get("amenities"):
+                    markdown_response += "\n**Amenidades:**\n"
+                    for amenity in room["amenities"]:
+                        markdown_response += f"- {amenity.get('name', '')}\n"
+                
+                markdown_response += "\n---\n\n"
+            
+            return {
+                "available": len(available_rooms) > 0,
+                "rooms": available_rooms,
+                "markdown_response": markdown_response,
+                "check_in": check_in,
+                "check_out": check_out
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking availability: {str(e)}")
+            return {
+                "available": False,
+                "rooms": [],
+                "markdown_response": "Lo siento, ha ocurrido un error al verificar la disponibilidad.",
+                "check_in": check_in,
+                "check_out": check_out
+            }
+
+    async def create_booking(self, booking_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Crea una nueva reserva y retorna confirmación enriquecida"""
+        try:
+            # Verificar disponibilidad primero
+            availability = await self.check_availability(
+                booking_data["hotel_id"],
+                booking_data["check_in"],
+                booking_data["check_out"],
+                booking_data.get("room_type_id")
+            )
+            
+            if not availability["available"]:
+                raise Exception("No hay habitaciones disponibles para las fechas seleccionadas")
+            
+            # Crear la reserva
+            booking_result = self.supabase.table("bookings").insert({
+                "hotel_id": booking_data["hotel_id"],
+                "lead_id": booking_data["lead_id"],
+                "room_type_id": booking_data["room_type_id"],
+                "check_in": booking_data["check_in"],
+                "check_out": booking_data["check_out"],
+                "total_amount": booking_data["total_amount"],
+                "guest_comments": booking_data.get("guest_comments"),
+                "guest_requirements": booking_data.get("guest_requirements"),
+                "status": "confirmed"
+            }).execute()
+            
+            booking = booking_result.data[0]
+            
+            # Generar QR para check-in
+            qr_result = self.supabase.table("booking_tickets").insert({
+                "booking_id": booking["id"],
+                "qr_code": f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={booking['id']}",
+                "ticket_number": f"TKT-{booking['id'][:8].upper()}",
+                "booking_details": booking
+            }).execute()
+            
+            # Obtener datos del hotel y habitación para la confirmación
+            hotel = self.supabase.table("hotels") \
+                .select("name") \
+                .eq("id", booking["hotel_id"]) \
+                .single() \
+                .execute()
+                
+            room_type = self.supabase.table("room_types") \
+                .select("name") \
+                .eq("id", booking["room_type_id"]) \
+                .single() \
+                .execute()
+            
+            # Preparar datos para la confirmación
+            confirmation_data = {
+                **booking,
+                "hotel_name": hotel.data["name"],
+                "room_type": room_type.data["name"],
+                "qr_code": qr_result.data[0]["qr_code"]
+            }
+            
+            # Generar respuesta en Markdown
+            markdown_response = self.response_enricher.format_booking_confirmation(confirmation_data)
+            
+            return {
+                "booking": confirmation_data,
+                "markdown_response": markdown_response
+            }
+            
+        except Exception as e:
+            raise Exception(f"Error al crear la reserva: {str(e)}")
