@@ -79,17 +79,16 @@ class BookingRequest(BaseModel):
 
 class BookingResponse(BaseModel):
     """
-    Modelo para respuestas de reserva
+    Modelo para respuesta de reserva
     """
-    booking_id: str = Field(..., description="ID único de la reserva")
-    hotel_name: str = Field(..., description="Nombre del hotel")
-    room_type_name: str = Field(..., description="Nombre del tipo de habitación")
-    check_in: datetime = Field(..., description="Fecha y hora de entrada")
-    check_out: datetime = Field(..., description="Fecha y hora de salida")
-    guests_count: int = Field(..., description="Número de huéspedes")
-    status: str = Field(..., description="Estado de la reserva")
-    special_requests: Optional[str] = Field(None, description="Solicitudes especiales")
-    created_at: datetime = Field(..., description="Fecha y hora de creación de la reserva")
+    booking_id: str
+    hotel_id: str
+    check_in: str
+    check_out: str
+    total_price: float
+    status: str
+    confirmation_code: str
+    message: str
 
 class AvailabilityResponse(BaseModel):
     """
@@ -99,6 +98,16 @@ class AvailabilityResponse(BaseModel):
     room_types: List[Dict[str, Any]] = Field(..., description="Lista de tipos de habitación con su disponibilidad")
     check_in: str = Field(..., description="Fecha de entrada")
     check_out: str = Field(..., description="Fecha de salida")
+
+class AvailabilityResponseNew(BaseModel):
+    """
+    Modelo para respuestas de disponibilidad
+    """
+    is_available: bool
+    available_rooms: int
+    price_per_night: float
+    total_price: float
+    message: str
 
 class RoomTypeInfo(BaseModel):
     """

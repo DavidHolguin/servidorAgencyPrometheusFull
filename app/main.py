@@ -2,6 +2,45 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime
+import logging
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Dict
+
+from app.api.v1.chat import router as chat_router
+from app.core.supabase_client import initialize_supabase
+from app.core.chatbot import ChatbotManager
+from app.core.state import active_chatbots
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    try:
+        # Inicializar cliente de Supabase
+        initialize_supabase()
+        logger.info("Supabase client initialized successfully")
+        
+        yield
+        
+    finally:
+        # Shutdown
+        try:
+            # Limpiar todos los chatbots activos
+            cleanup_tasks = [
+                chatbot.cleanup() 
+                for chatbot in active_chatbots.values()
+            ]
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            active_chatbots.clear()
+            
+            logger.info("Application shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {str(e)}")
 
 app = FastAPI(
     title="Travel Chatbot API",
@@ -16,10 +55,11 @@ app = FastAPI(
     },
     license_info={
         "name": "Privado",
-    }
+    },
+    lifespan=lifespan
 )
 
-# Configuración de CORS
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,11 +120,13 @@ async def test_supabase():
     except Exception as e:
         return {"error": str(e)}
 
+# Incluir routers
+app.include_router(chat_router, prefix="/api/v1", tags=["chat"])
+
 # Importar routers
-from app.api.v1 import chat, reservas, webhooks, admin_chat
+from app.api.v1 import reservas, webhooks, admin_chat
 
 # Incluir routers con sus prefijos
-app.include_router(chat.router, prefix="/api/v1", tags=["chatbot"])
 app.include_router(reservas.router, prefix="/api/v1", tags=["reservas"])
 app.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
 app.include_router(admin_chat.router, prefix="/api/v1", tags=["admin_chat"])

@@ -1,84 +1,67 @@
 # app/api/v1/chat.py
-from fastapi import APIRouter, HTTPException, Depends, Query, Path
-from typing import Optional, Dict, Any
-from app.models.schemas import Message, BookingRequest, MessageResponse, AvailabilityResponse, BookingResponse, RoomTypeResponse, RoomType
-from app.core.chatbot import ChatbotManager
+from fastapi import APIRouter, HTTPException, Query, Depends, Path
+from typing import Optional
+import logging
+from datetime import datetime
 
+from app.core.chatbot import ChatbotManager
+from app.core.state import get_active_chatbots, active_chatbots
+from app.models.schemas import (
+    AvailabilityResponse, 
+    BookingResponse, 
+    BookingRequest,
+    RoomTypeResponse,
+    RoomType
+)
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.post(
-    "/send-message",
-    response_model=MessageResponse,
-    summary="Enviar mensaje al chatbot",
-    description="Procesa un mensaje del usuario y devuelve la respuesta del chatbot utilizando el contexto específico del chatbot_id"
-)
+@router.post("/send-message")
 async def send_message(
-    message: Message = Depends(),
-) -> MessageResponse:
+    chatbot_id: str = Query(..., description="ID del chatbot"),
+    message: str = Query(..., description="Mensaje del usuario"),
+    lead_id: Optional[str] = Query(None, description="ID del lead (opcional)"),
+    channel: str = Query("web", description="Canal de comunicación")
+):
     """
-    Envía un mensaje al chatbot y recibe una respuesta.
-
-    Args:
-        message: Objeto Message que contiene:
-            - chatbot_id: ID único del chatbot
-            - message: Texto del mensaje del usuario
-            - lead_id: ID del usuario o conversación
-            - audio_content: Contenido del mensaje de audio en base64 (opcional)
-
-    Returns:
-        MessageResponse: Objeto con la respuesta del chatbot
-
-    Raises:
-        HTTPException: Error 500 si hay un problema procesando el mensaje
+    Envía un mensaje al chatbot y obtiene una respuesta
     """
     try:
-        print(f"Processing message for chatbot_id: {message.chatbot_id}")
-        chatbot = ChatbotManager(message.chatbot_id)
-        print(f"ChatbotManager initialized")
+        logger.info(f"Processing message for chatbot_id: {chatbot_id}")
         
+        # Obtener o crear instancia del chatbot
+        chatbot = active_chatbots.get(chatbot_id)
+        
+        if not chatbot:
+            chatbot = ChatbotManager(chatbot_id)
+            await chatbot.initialize()
+            active_chatbots[chatbot_id] = chatbot
+            logger.info("ChatbotManager initialized")
+
+        # Procesar mensaje
         response_dict = await chatbot.process_message(
-            message.message,
-            message.lead_id,
-            message.audio_content
+            message=message,
+            lead_id=lead_id
         )
-        print(f"Raw response from chatbot: {response_dict}")
         
-        # Asegurarse de que tenemos un diccionario con la estructura correcta
-        if isinstance(response_dict, str):
-            response_dict = {
-                "response": response_dict,
-                "suggested_actions": [],
-                "context": {}
-            }
-        elif not isinstance(response_dict, dict):
-            response_dict = {
-                "response": str(response_dict),
-                "suggested_actions": [],
-                "context": {}
-            }
+        logger.info(f"Raw response from chatbot: {response_dict}")
+
+        # Formatear respuesta
+        formatted_response = {
+            "response": response_dict.get("response", "Lo siento, no pude procesar tu mensaje."),
+            "suggested_actions": response_dict.get("suggested_actions", []),
+            "context": response_dict.get("context", {})
+        }
         
-        # Construir la respuesta usando el modelo Pydantic
-        response = MessageResponse(
-            response=str(response_dict.get("response", "")),
-            suggested_actions=response_dict.get("suggested_actions", []),
-            context=response_dict.get("context", {})
-        )
-        print(f"Formatted response: {response.dict()}")
-        return response
-        
-    except ValueError as ve:
-        print(f"ValueError in send_message: {str(ve)}")
-        return MessageResponse(
-            response=f"Error: {str(ve)}",
-            suggested_actions=[],
-            context={}
-        )
+        logger.info(f"Formatted response: {formatted_response}")
+        return formatted_response
+
     except Exception as e:
-        print(f"Error in send_message: {str(e)}")
-        return MessageResponse(
-            response="Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente.",
-            suggested_actions=[],
-            context={}
+        logger.error(f"Error processing message: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing message: {str(e)}"
         )
 
 @router.post(
