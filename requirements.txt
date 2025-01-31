@@ -19,15 +19,14 @@ langchain-openai==0.0.2
 
 # Utilidades y herramientas
 python-dotenv==1.0.0
-pydantic==2.5.2
+pydantic>=2.5.2
 pydantic[email]>=2.0.0
 pydantic-settings>=2.0.0
 requests>=2.31.0
-asyncio==3.4.3
-tiktoken==0.5.1
-faiss-cpu==1.7.4
-numpy==1.24.3
-tenacity==8.2.3
+asyncio>=3.4.3
+tiktoken>=0.5.1
+numpy>=1.24.0
+faiss-cpu>=1.7.0
 
 # Autenticación y seguridad
 python-jose[cryptography]==3.3.0
