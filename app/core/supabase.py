@@ -13,10 +13,10 @@ def get_supabase_client() -> Optional[Client]:
     
     print("Initializing Supabase client...")
     print(f"Supabase URL: {settings.supabase_url}")
-    print(f"Supabase Key length: {len(settings.supabase_key) if settings.supabase_key else 0}")
+    print(f"Supabase Key length: {len(settings.supabase_anon_key) if settings.supabase_anon_key else 0}")
     
     # Validate Supabase credentials
-    if not settings.supabase_url or not settings.supabase_key:
+    if not settings.supabase_url or not settings.supabase_anon_key:
         print("Error: Missing Supabase credentials")
         if os.getenv("ENVIRONMENT") == "production":
             raise ValueError("Supabase credentials are required in production")
@@ -24,7 +24,7 @@ def get_supabase_client() -> Optional[Client]:
         return None
     
     try:
-        client = create_client(settings.supabase_url, settings.supabase_key)
+        client = create_client(settings.supabase_url, settings.supabase_anon_key)
         print("Supabase client initialized successfully")
         
         # Test the connection

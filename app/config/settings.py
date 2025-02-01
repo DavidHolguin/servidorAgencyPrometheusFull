@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY", "")  # Hacer openai_api_key opcional
 
     # Supabase
-    supabase_url: Optional[str] = os.getenv("SUPABASE_URL", "")  # Hacer supabase_url opcional
-    supabase_key: Optional[str] = os.getenv("SUPABASE_KEY", "")  # Hacer supabase_key opcional
+    supabase_url: str = os.getenv("SUPABASE_URL", "https://eawutspxunldlkfesgik.supabase.co")
+    supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY", "")
+    supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     supabase_admin_email: Optional[str] = os.getenv("SUPABASE_ADMIN_EMAIL", "admin@agency.com")
     supabase_admin_password: Optional[str] = os.getenv("SUPABASE_ADMIN_PASSWORD", "admin123")
 
@@ -48,8 +49,8 @@ class Settings(BaseSettings):
         if self.environment == "production":
             if not self.openai_api_key:
                 raise ValueError("OPENAI_API_KEY es requerido en producción")
-            if not self.supabase_url or not self.supabase_key:
-                raise ValueError("SUPABASE_URL y SUPABASE_KEY son requeridos en producción")
+            if not self.supabase_url or not self.supabase_anon_key or not self.supabase_service_key:
+                raise ValueError("SUPABASE_URL, SUPABASE_ANON_KEY y SUPABASE_SERVICE_KEY son requeridos en producción")
             if not self.whatsapp_api_token:
                 raise ValueError("WHATSAPP_API_TOKEN es requerido en producción")
 

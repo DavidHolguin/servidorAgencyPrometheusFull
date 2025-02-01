@@ -3,8 +3,10 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Path
 from typing import Optional
 import logging
 from datetime import datetime
+from app.core.enhanced_chatbot import EnhancedChatbot
 
-from app.core.enhanced_chatbot import EnhancedChatbotManager
+from app.core import EnhancedChatbotManager
+from app.core.supabase_client import get_client
 from app.core.state import get_active_chatbots, active_chatbots
 from app.models.schemas import (
     AvailabilityResponse, 
@@ -17,17 +19,36 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Almacén de instancias de chatbot
+# Diccionario para mantener las instancias de chatbots
 chatbot_instances = {}
 
-def get_chatbot(chatbot_id: str) -> EnhancedChatbotManager:
-    """Obtiene o crea una instancia de chatbot"""
-    if chatbot_id not in chatbot_instances:
-        chatbot_instances[chatbot_id] = EnhancedChatbotManager(chatbot_id)
-    return chatbot_instances[chatbot_id]
+async def get_or_create_chatbot(agency_id: str, chatbot_id: str) -> EnhancedChatbot:
+    """
+    Obtiene o crea una instancia de chatbot
+    
+    Args:
+        agency_id: ID de la agencia
+        chatbot_id: ID del chatbot
+        
+    Returns:
+        EnhancedChatbot: Instancia del chatbot
+    """
+    chatbot_key = f"{agency_id}:{chatbot_id}"
+    
+    if chatbot_key not in chatbot_instances:
+        # Crear nueva instancia
+        chatbot = EnhancedChatbot(agency_id=agency_id, chatbot_id=chatbot_id)
+        # Inicializar el chatbot
+        await chatbot.initialize()
+        chatbot_instances[chatbot_key] = chatbot
+        logger.info(f"Nuevo chatbot creado: {chatbot_key}")
+    
+    return chatbot_instances[chatbot_key]
 
 @router.post("/send-message")
+@router.get("/send-message")
 async def send_message(
+    agency_id: str = Query(..., description="ID de la agencia"),
     chatbot_id: str = Query(..., description="ID del chatbot"),
     message: str = Query(..., description="Mensaje del usuario"),
     lead_id: Optional[str] = Query(None, description="ID del lead (opcional)"),
@@ -37,39 +58,61 @@ async def send_message(
     Envía un mensaje al chatbot y obtiene una respuesta
     
     Args:
-        chatbot_id: ID del chatbot
+        agency_id: ID de la agencia propietaria del chatbot
+        chatbot_id: ID del chatbot a utilizar
         message: Mensaje del usuario
         lead_id: ID opcional del lead/usuario
         channel: Canal de comunicación (web, whatsapp, etc.)
         
     Returns:
         Dict con la respuesta del chatbot y metadatos
+        
+    Raises:
+        HTTPException: 
+            - 404 si el chatbot no existe o no pertenece a la agencia
+            - 500 si hay un error procesando el mensaje
     """
     try:
-        # Obtener instancia del chatbot
-        chatbot = get_chatbot(chatbot_id)
+        # Validar que el chatbot pertenece a la agencia
+        supabase = get_client()
+        chatbot_response = supabase.table('chatbots')\
+            .select('*')\
+            .eq('id', chatbot_id)\
+            .eq('agency_id', agency_id)\
+            .execute()
+            
+        if not chatbot_response.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No se encontró el chatbot {chatbot_id} para la agencia {agency_id}"
+            )
+            
+        # Obtener o crear instancia del chatbot
+        chatbot = await get_or_create_chatbot(agency_id, chatbot_id)
         
         # Procesar mensaje
-        response = await chatbot.process_message(message, lead_id)
+        response = await chatbot.process_message(
+            message=message,
+            chatbot_data=chatbot_response.data[0]
+        )
         
-        logger.info(f"Raw response from chatbot: {response}")
-        
-        # Formatear respuesta
-        formatted_response = {
-            "response": response["response"],
-            "suggested_actions": response["suggested_actions"],
-            "context": response["context"]
+        return {
+            "text": response["text"],
+            "galleries": response.get("galleries", []),
+            "timestamp": datetime.now().isoformat(),
+            "chatbot_id": chatbot_id,
+            "agency_id": agency_id,
+            "lead_id": lead_id,
+            "channel": channel
         }
-        
-        logger.info(f"Formatted response: {formatted_response}")
-        
-        return formatted_response
-        
+    except HTTPException as he:
+        # Re-lanzar excepciones HTTP
+        raise he
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail="Error processing message"
+            detail=f"Error procesando el mensaje: {str(e)}"
         )
 
 @router.post(
@@ -98,7 +141,7 @@ async def check_availability(
         HTTPException: Error 500 si hay un problema verificando la disponibilidad
     """
     try:
-        chatbot = get_chatbot(hotel_id)
+        chatbot = await get_or_create_chatbot(hotel_id, hotel_id)
         availability = await chatbot.check_availability(hotel_id, check_in, check_out)
         return availability
     except Exception as e:
@@ -133,7 +176,7 @@ async def create_booking(
         HTTPException: Error 500 si hay un problema creando la reserva
     """
     try:
-        chatbot = get_chatbot(booking.agency_id)
+        chatbot = await get_or_create_chatbot(booking.agency_id, booking.agency_id)
         result = await chatbot.create_booking(booking.dict())
         return result
     except Exception as e:
@@ -163,7 +206,7 @@ async def get_room_types(
         HTTPException: Error 404 si no se encuentra el hotel o 500 si hay un error del servidor
     """
     try:
-        chatbot = get_chatbot(chatbot_id)
+        chatbot = await get_or_create_chatbot(chatbot_id, chatbot_id)
         room_types = await chatbot.get_room_types(hotel_id)
         return {
             "room_types": room_types,
@@ -200,7 +243,7 @@ async def get_room_type_details(
         HTTPException: Error 404 si no se encuentra el tipo de habitación o 500 si hay un error del servidor
     """
     try:
-        chatbot = get_chatbot(chatbot_id)
+        chatbot = await get_or_create_chatbot(chatbot_id, chatbot_id)
         room_details = await chatbot.get_room_details(room_type_id)
         if not room_details:
             raise ValueError(f"Room type {room_type_id} not found")

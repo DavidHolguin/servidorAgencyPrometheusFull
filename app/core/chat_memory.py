@@ -162,6 +162,14 @@ class EnhancedChatMemory:
                 "relevant_messages": []
             }
             
+    def get_chat_history(self) -> List[BaseMessage]:
+        """Obtiene el historial de chat de la memoria a corto plazo"""
+        try:
+            return self.short_term_memory.chat_memory.messages
+        except Exception as e:
+            logger.error(f"Error getting chat history: {str(e)}")
+            return []
+            
     def clear(self) -> None:
         """Limpia toda la memoria"""
         try:

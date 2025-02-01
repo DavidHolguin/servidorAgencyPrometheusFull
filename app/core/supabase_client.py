@@ -17,10 +17,10 @@ def initialize_supabase() -> None:
         
         # Obtener credenciales
         supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
+        supabase_key = os.getenv("SUPABASE_ANON_KEY")  # Usamos la clave anon por defecto
         
         if not supabase_url or not supabase_key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
+            raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY environment variables are required")
         
         logger.info("Initializing Supabase client...")
         logger.info(f"Supabase URL: {supabase_url}")

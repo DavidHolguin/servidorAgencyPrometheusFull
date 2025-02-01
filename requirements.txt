@@ -34,5 +34,5 @@ email-validator==2.1.0.post1
 passlib[bcrypt]==1.7.4
 
 # Cola de tareas
-redis==5.0.1
+redis>=4.5.0
 rq==1.15.1

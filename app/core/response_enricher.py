@@ -1,98 +1,83 @@
 from typing import List, Dict, Any
-from datetime import datetime
 import logging
+import re
+from app.core.gallery_manager import GalleryManager
 
 logger = logging.getLogger(__name__)
 
 class ResponseEnricher:
     """Clase para enriquecer las respuestas del chatbot con elementos visuales y formateo"""
     
-    def format_room_availability(self, rooms: List[Dict], check_in: datetime, check_out: datetime) -> str:
-        """Formatea la información de disponibilidad de habitaciones en markdown con imágenes"""
-        try:
-            if not rooms:
-                return "Lo siento, no hay habitaciones disponibles para las fechas seleccionadas."
-            
-            markdown = []  # Usar lista para concatenación más eficiente
-            
-            for room in rooms:
-                # Agregar imágenes primero
-                if room.get('images'):
-                    markdown.append("<div class='image-gallery'>\n")
-                    for image in room['images']:
-                        markdown.append(f"![{image.get('description', room['name'])}]({image['url']})\n")
-                    markdown.append("</div>\n\n")
-                
-                # Información básica
-                markdown.append(f"### 🏨 {room['name']}\n\n")
-                
-                if room.get('description'):
-                    markdown.append(f"{room['description']}\n\n")
-                
-                if room.get('price_per_night'):
-                    markdown.append(f"💰 **Precio por noche:** ${room['price_per_night']}\n")
-                
-                # Características principales
-                features = []
-                if room.get('max_occupancy'):
-                    features.append(f"👥 Capacidad: {room['max_occupancy']} personas")
-                if room.get('beds'):
-                    features.append(f"🛏️ Camas: {room['beds']}")
-                if room.get('bathrooms'):
-                    features.append(f"🚿 Baños: {room['bathrooms']}")
-                
-                if features:
-                    markdown.append("\n**Características:**\n")
-                    markdown.append("\n".join(f"- {feature}" for feature in features))
-                    markdown.append("\n")
-                
-                # Amenidades
-                if room.get('amenities'):
-                    markdown.append("\n**✨ Amenidades:**\n")
-                    for amenity in room['amenities']:
-                        icon = amenity.get('icon', '•')
-                        markdown.append(f"- {icon} {amenity['name']}\n")
-                
-                markdown.append("\n---\n\n")
-            
-            # Acciones rápidas
-            markdown.append("### 🎯 Acciones Rápidas\n\n")
-            markdown.append("1. [📅 Reservar Ahora](#booking)\n")
-            markdown.append("2. [🔍 Ver Más Detalles](#details)\n")
-            markdown.append("3. [📸 Ver Más Fotos](#gallery)\n")
-            
-            return "".join(markdown)
-            
-        except Exception as e:
-            logger.error(f"Error formatting room availability: {str(e)}")
-            return "Error al formatear la información de las habitaciones."
+    def __init__(self):
+        self.gallery_manager = GalleryManager()
+        
+    async def initialize(self):
+        """Inicializa el ResponseEnricher cargando datos necesarios"""
+        await self.gallery_manager.initialize()
     
-    def format_booking_confirmation(self, booking_data: Dict[str, Any]) -> str:
-        """Formatea la confirmación de reserva en markdown con QR"""
+    async def enrich_response(
+        self,
+        llm_response: str,
+        search_terms: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Enriquece la respuesta del chatbot con galerías de imágenes relevantes
+        
+        Args:
+            llm_response: Texto de respuesta del chatbot
+            search_terms: Términos de búsqueda para encontrar galerías relevantes
+            
+        Returns:
+            Dict con la respuesta enriquecida y las galerías encontradas
+        """
         try:
-            markdown = "### 🎉 ¡Reserva Confirmada!\n\n"
+            # Inicializar respuesta
+            enriched_response = {
+                'text': llm_response,
+                'galleries': []
+            }
             
-            # Detalles principales
-            markdown += f"🏨 **Hotel:** {booking_data['hotel_name']}\n"
-            markdown += f"🛏️ **Habitación:** {booking_data['room_type']}\n"
-            markdown += f"📅 **Check-in:** {booking_data['check_in']}\n"
-            markdown += f"📅 **Check-out:** {booking_data['check_out']}\n"
-            markdown += f"💰 **Total:** ${booking_data['total_amount']}\n\n"
+            # Validar términos de búsqueda
+            if not search_terms or not isinstance(search_terms, list):
+                return enriched_response
+                
+            # Filtrar términos nulos y vacíos
+            filtered_terms = [term for term in search_terms if term and isinstance(term, str)]
+            if not filtered_terms:
+                return enriched_response
             
-            # Código QR
-            if booking_data.get('qr_code'):
-                markdown += "### 📱 Código QR para Check-in\n\n"
-                markdown += f"![QR Code]({booking_data['qr_code']})\n\n"
+            # Buscar galerías relevantes
+            galleries = self.gallery_manager.find_relevant_galleries(filtered_terms)
             
-            # Instrucciones
-            markdown += "### ℹ️ Información Importante\n\n"
-            markdown += "* Check-in a partir de las 15:00\n"
-            markdown += "* Check-out hasta las 12:00\n"
-            markdown += "* Presentar identificación oficial\n"
-            markdown += "* Mostrar este código QR en recepción\n\n"
+            # Preparar las galerías con sus imágenes
+            enriched_galleries = []
+            for gallery in galleries:
+                gallery_images = []
+                
+                # Procesar imágenes de la galería
+                for image in gallery.get('gallery_images', []):
+                    if url := image.get('url'):
+                        gallery_images.append({
+                            'url': url,
+                            'name': image.get('name', ''),
+                            'description': image.get('description', '')
+                        })
+                
+                if gallery_images:  # Solo incluir galerías que tengan imágenes
+                    enriched_galleries.append({
+                        'id': gallery.get('id'),
+                        'name': gallery.get('name', ''),
+                        'description': gallery.get('description', ''),
+                        'images': gallery_images
+                    })
             
-            return markdown
+            enriched_response['galleries'] = enriched_galleries
+            return enriched_response
             
         except Exception as e:
-            logger.error(f"Error formatting booking confirmation: {str(e)}")
-            return "Error al formatear la confirmación de reserva."
+            logger.error(f"Error enriqueciendo respuesta: {str(e)}")
+            # En caso de error, devolver solo el texto original
+            return {
+                'text': llm_response,
+                'galleries': []
+            }

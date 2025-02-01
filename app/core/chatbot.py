@@ -12,6 +12,130 @@ from app.core.response_enricher import ResponseEnricher
 
 logger = logging.getLogger(__name__)
 
+class ImageProcessor:
+    """Procesa y gestiona las solicitudes de imágenes"""
+    
+    def __init__(self, supabase_client):
+        self.supabase = supabase_client
+        self.image_keywords = {
+            "ver": 0.8,
+            "foto": 0.9,
+            "fotos": 0.9,
+            "imagen": 0.9,
+            "imágenes": 0.9,
+            "imagenes": 0.9,
+            "muestra": 0.7,
+            "enseña": 0.7,
+            "mostrar": 0.8,
+            "galería": 0.8,
+            "galeria": 0.8,
+            "fotografía": 0.9,
+            "fotografias": 0.9,
+            "selfie": 0.8,
+            "selfies": 0.8,
+            "video": 0.8,
+            "videos": 0.8
+        }
+        
+        self.resource_mappings = {
+            "habitaciones": {
+                "casa árbol": {"keywords": ["casa arbol", "casa del arbol", "arbol"], "weight": 1.0},
+                "casa del árbol": {"keywords": ["casa arbol", "arbol", "tree house"], "weight": 1.0},
+                "cabaña presidencial": {"keywords": ["presidencial", "cabin", "premium"], "weight": 1.0},
+                "presidencial": {"keywords": ["presidencial", "premium", "vip"], "weight": 0.9},
+                "cacique": {"keywords": ["cacique", "chief"], "weight": 1.0},
+                "quimbaya": {"keywords": ["quimbaya", "indigenous"], "weight": 1.0},
+                "familiar": {"keywords": ["familiar", "family", "grupo"], "weight": 1.0}
+            },
+            "instalaciones": {
+                "piscina": {"keywords": ["piscina", "pool", "nadar"], "weight": 1.0},
+                "restaurante": {"keywords": ["restaurante", "comida", "dining"], "weight": 1.0},
+                "spa": {"keywords": ["spa", "masajes", "relax"], "weight": 1.0},
+                "zonas comunes": {"keywords": ["zonas comunes", "areas", "common"], "weight": 0.9}
+            },
+            "actividades": {
+                "pasadía": {"keywords": ["pasadia", "day pass", "dia"], "weight": 1.0},
+                "eventos": {"keywords": ["eventos", "events", "reuniones"], "weight": 1.0},
+                "actividades": {"keywords": ["actividades", "activities", "hacer"], "weight": 0.9}
+            }
+        }
+    
+    def detect_image_intent(self, message: str) -> float:
+        """Detecta la intención de ver imágenes en el mensaje"""
+        message_lower = message.lower()
+        max_score = 0.0
+        
+        for keyword, weight in self.image_keywords.items():
+            if keyword in message_lower:
+                max_score = max(max_score, weight)
+        
+        return max_score
+    
+    def extract_resource_type(self, message: str) -> Optional[Dict[str, Any]]:
+        """Extrae el tipo de recurso solicitado del mensaje"""
+        message_lower = message.lower()
+        best_match = None
+        highest_score = 0.0
+        
+        for category, resources in self.resource_mappings.items():
+            for term, details in resources.items():
+                # Verificar coincidencia con el término o sus keywords
+                matches = [term in message_lower] + [
+                    keyword in message_lower 
+                    for keyword in details["keywords"]
+                ]
+                
+                if any(matches):
+                    score = details["weight"] * (sum(matches) / len(matches))
+                    if score > highest_score:
+                        highest_score = score
+                        best_match = {
+                            "category": category,
+                            "term": term,
+                            "keywords": details["keywords"],
+                            "score": score
+                        }
+        
+        return best_match if highest_score > 0.7 else None
+    
+    async def get_resource_images(self, resource_type: Dict[str, Any], limit: int = 5) -> List[Dict]:
+        """Obtiene las imágenes del recurso solicitado"""
+        try:
+            # Buscar galería que coincida con las keywords
+            gallery_result = self.supabase.from_('image_galleries')\
+                .select('*')\
+                .contains('keywords', resource_type["keywords"])\
+                .execute()
+            
+            if not gallery_result.data:
+                return []
+            
+            gallery_id = gallery_result.data[0]['id']
+            
+            # Obtener imágenes de la galería
+            images_result = self.supabase.from_('gallery_images')\
+                .select('*')\
+                .eq('gallery_id', gallery_id)\
+                .order('is_cover', desc=True)\
+                .order('position')\
+                .limit(limit)\
+                .execute()
+            
+            return [
+                {
+                    "url": img["url"],
+                    "description": img.get("description", ""),
+                    "is_cover": img.get("is_cover", False),
+                    "title": img.get("title", ""),
+                    "metadata": img.get("metadata", {})
+                }
+                for img in images_result.data
+            ] if images_result.data else []
+            
+        except Exception as e:
+            logger.error(f"Error getting resource images: {str(e)}")
+            return []
+
 class ChatbotManager:
     """Gestiona las interacciones y el estado del chatbot"""
 
@@ -35,6 +159,7 @@ class ChatbotManager:
         }
         self.supabase = get_client()
         self.response_enricher = ResponseEnricher()
+        self.image_processor = ImageProcessor(self.supabase)
 
     async def initialize(self):
         """Inicializa el chatbot cargando su configuración desde la base de datos"""
@@ -126,68 +251,62 @@ class ChatbotManager:
         except Exception as e:
             logger.error(f"Error initializing memory: {str(e)}")
 
-    async def process_message(self, message: str, lead_id: str = None, audio_content: str = None) -> Dict:
-        """Procesa un mensaje y genera una respuesta"""
+    async def process_message(self, message: str) -> Dict[str, Any]:
+        """Procesa el mensaje del usuario y genera una respuesta"""
         try:
-            start_time = time.time()
+            # Detectar intención de ver imágenes
+            image_intent_score = self.image_processor.detect_image_intent(message)
             
-            # Obtener estado de conversación
-            conv_state = await self._get_conversation_state_async(lead_id)
-            
-            # Detectar si es una solicitud de imágenes/fotos
-            image_keywords = [
-                "foto", "fotos", "imagen", "imágenes", "imagenes", 
-                "ver foto", "ver fotos", "muestra", "enseña", "mostrar"
-            ]
-            
-            is_image_request = any(keyword in message.lower() for keyword in image_keywords)
-            
-            if is_image_request:
-                # Extraer el tipo de habitación mencionado
-                room_types = {
-                    "casa árbol": "casa_arbol",
-                    "casa del árbol": "casa_arbol",
-                    "presidencial": "presidencial",
-                    "cacique": "cacique",
-                    "quimbaya": "quimbaya",
-                    "familiar": "familiar"
-                }
+            if image_intent_score > 0.7:
+                # Extraer el tipo de recurso solicitado
+                resource_type = self.image_processor.extract_resource_type(message)
                 
-                requested_room = None
-                for room_name in room_types:
-                    if room_name in message.lower():
-                        requested_room = room_types[room_name]
-                        break
-                
-                # Consultar imágenes de la habitación
-                availability = await self.check_availability(
-                    self.chatbot_id,
-                    datetime.now().strftime("%Y-%m-%d"),
-                    (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
-                    room_type_id=requested_room
-                )
-                
-                return {
-                    "response": availability["markdown_response"],
-                    "metadata": {
-                        "type": "image_response",
-                        "data": availability
-                    },
-                    "suggested_actions": [
-                        {"type": "button", "text": "Reservar ahora"},
-                        {"type": "button", "text": "Ver más detalles"},
-                        {"type": "button", "text": "Ver otras habitaciones"}
-                    ],
-                    "context": conv_state
-                }
+                if resource_type:
+                    # Obtener imágenes del recurso
+                    images = await self.image_processor.get_resource_images(resource_type)
+                    
+                    if images:
+                        # Formatear respuesta con galería de imágenes
+                        gallery_response = self.response_enricher.format_image_gallery(
+                            images=images,
+                            category=resource_type["category"],
+                            term=resource_type["term"]
+                        )
+                        
+                        return {
+                            "response": gallery_response,
+                            "suggested_actions": self._get_suggested_actions(resource_type["category"]),
+                            "context": self._get_current_context()
+                        }
+                    else:
+                        return {
+                            "response": f"Lo siento, no encontré imágenes de {resource_type['term']}. ¿Te gustaría ver imágenes de otras áreas?",
+                            "suggested_actions": [
+                                "🏨 Ver Habitaciones",
+                                "✨ Ver Instalaciones",
+                                "🎯 Ver Actividades"
+                            ],
+                            "context": self._get_current_context()
+                        }
+                else:
+                    return {
+                        "response": "¿Qué tipo de imágenes te gustaría ver? Tenemos fotos de nuestras habitaciones, instalaciones y actividades.",
+                        "suggested_actions": [
+                            "🏨 Ver Habitaciones",
+                            "✨ Ver Instalaciones",
+                            "🎯 Ver Actividades"
+                        ],
+                        "context": self._get_current_context()
+                    }
             
+            # Continuar con el procesamiento normal del mensaje si no es una solicitud de imágenes
             # Verificar respuestas rápidas (solo si no es solicitud de imágenes)
             quick_response = self._check_quick_questions(message)
             if quick_response:
                 return {
                     "response": quick_response,
                     "suggested_actions": self._get_suggested_actions(quick_response),
-                    "context": conv_state
+                    "context": self._get_current_context()
                 }
 
             # Detectar intención de consultar disponibilidad
@@ -207,7 +326,7 @@ class ChatbotManager:
                         "suggested_actions": [
                             {"type": "date_picker", "text": "Seleccionar fechas"}
                         ],
-                        "context": conv_state
+                        "context": self._get_current_context()
                     }
                 
                 availability = await self.check_availability(
@@ -227,12 +346,12 @@ class ChatbotManager:
                         {"type": "button", "text": "Ver más detalles"},
                         {"type": "button", "text": "Consultar otras fechas"}
                     ],
-                    "context": conv_state
+                    "context": self._get_current_context()
                 }
 
             # Obtener memoria relevante y generar respuesta
-            relevant_memory = await self._get_relevant_memory(message, conv_state)
-            messages = self._prepare_messages_optimized(message, conv_state, relevant_memory)
+            relevant_memory = await self._get_relevant_memory(message, self._get_current_context())
+            messages = self._prepare_messages_optimized(message, self._get_current_context(), relevant_memory)
             
             full_response = ""
             async for chunk in openai_client.stream_response(
@@ -242,7 +361,7 @@ class ChatbotManager:
                 full_response += chunk
 
             # Actualizar estado y memoria
-            await self._update_conversation_and_memory(lead_id, message, full_response)
+            await self._update_conversation_and_memory(None, message, full_response)
             
             # Registrar métricas
             processing_time = time.time() - start_time
@@ -251,15 +370,15 @@ class ChatbotManager:
             return {
                 "response": full_response,
                 "suggested_actions": self._get_suggested_actions(full_response),
-                "context": conv_state
+                "context": self._get_current_context()
             }
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             return {
-                "response": "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente.",
+                "response": "Lo siento, hubo un error al procesar tu mensaje. ¿Podrías intentarlo de nuevo?",
                 "suggested_actions": [],
-                "context": conv_state
+                "context": self._get_current_context()
             }
 
     def _extract_dates_from_message(self, message: str) -> Optional[Dict[str, str]]:
@@ -547,25 +666,32 @@ class ChatbotManager:
             logger.error(f"Error checking quick questions: {str(e)}")
             return None
 
-    def _get_suggested_actions(self, response: str) -> List[Dict]:
-        """Extrae acciones sugeridas de la respuesta"""
-        try:
-            suggested_actions = []
-            
-            # Verificar si hay quick_questions configuradas que sean relevantes
-            if self.quick_questions:
-                for question in self.quick_questions:
-                    if isinstance(question, dict) and 'text' in question:
-                        suggested_actions.append({
-                            'type': 'quick_reply',
-                            'text': question['text']
-                        })
-
-            # Limitar a máximo 4 sugerencias
-            return suggested_actions[:4]
-        except Exception as e:
-            logger.error(f"Error getting suggested actions: {str(e)}")
-            return []
+    def _get_suggested_actions(self, category: str) -> List[str]:
+        """Obtiene acciones sugeridas según la categoría"""
+        if category == "habitaciones":
+            return [
+                "📅 Consultar Disponibilidad",
+                "💰 Ver Tarifas",
+                "🏨 Ver Otras Habitaciones"
+            ]
+        elif category == "instalaciones":
+            return [
+                "🏊‍♂️ Ver Horarios",
+                "📍 Cómo Llegar",
+                "🎯 Ver Actividades"
+            ]
+        elif category == "actividades":
+            return [
+                "📅 Reservar Actividad",
+                "💰 Ver Precios",
+                "ℹ️ Más Información"
+            ]
+        else:
+            return [
+                "🏨 Ver Habitaciones",
+                "✨ Ver Instalaciones",
+                "🎯 Ver Actividades"
+            ]
 
     async def check_availability(
         self,
@@ -580,75 +706,111 @@ class ChatbotManager:
             check_in_date = datetime.strptime(check_in, "%Y-%m-%d")
             check_out_date = datetime.strptime(check_out, "%Y-%m-%d")
             
-            # Consultar habitaciones disponibles con imágenes
-            query = self.supabase.table("room_types") \
-                .select("*, room_type_amenities(amenity:amenities(*)), room_type_images(image_url, description)") \
-                .eq("hotel_id", hotel_id)
-                
-            if room_type_id:
-                query = query.eq("id", room_type_id)
-                
-            rooms = query.execute()
+            # Consulta base para room_types con imágenes y amenidades
+            query = self.supabase.from_('room_types')\
+                .select("""
+                    *,
+                    room_type_images (
+                        id,
+                        url,
+                        description,
+                        is_cover,
+                        position
+                    ),
+                    room_type_amenities (
+                        amenity:amenities (
+                            id,
+                            name,
+                            icon,
+                            description,
+                            category
+                        )
+                    )
+                """)\
+                .eq('hotel_id', hotel_id)
             
-            # Verificar disponibilidad real consultando reservas existentes
+            if room_type_id:
+                query = query.eq('id', room_type_id)
+            
+            rooms_result = query.execute()
+            
+            if not rooms_result.data:
+                return {
+                    "available": False,
+                    "rooms": [],
+                    "markdown_response": "No se encontraron habitaciones disponibles."
+                }
+            
+            # Verificar disponibilidad real consultando reservas
             available_rooms = []
-            for room in rooms.data:
+            for room in rooms_result.data:
                 # Consultar reservas existentes para estas fechas
-                bookings = self.supabase.table("bookings") \
-                    .select("*") \
-                    .eq("hotel_id", hotel_id) \
-                    .eq("room_type_id", room["id"]) \
-                    .lte("check_in", check_out) \
-                    .gte("check_out", check_in) \
+                bookings = self.supabase.table("bookings")\
+                    .select("*")\
+                    .eq("hotel_id", hotel_id)\
+                    .eq("room_type_id", room["id"])\
+                    .gte("check_in", check_in)\
+                    .lte("check_out", check_out)\
                     .execute()
                 
-                # Si no hay reservas que se superpongan, la habitación está disponible
-                if not bookings.data:
+                # Verificar si hay habitaciones disponibles de este tipo
+                rooms_of_type = self.supabase.table("rooms")\
+                    .select("*")\
+                    .eq("room_type_id", room["id"])\
+                    .eq("status", "available")\
+                    .execute()
+                
+                total_rooms = len(rooms_of_type.data) if rooms_of_type.data else 0
+                booked_rooms = len(bookings.data) if bookings.data else 0
+                
+                if total_rooms > booked_rooms:
                     # Procesar imágenes
                     room_images = []
                     if room.get("room_type_images"):
-                        for image in room["room_type_images"]:
-                            if image.get("image_url"):
+                        for image in sorted(room["room_type_images"], key=lambda x: (not x.get("is_cover", False), x.get("position", 0))):
+                            if image.get("url"):
                                 room_images.append({
-                                    "url": image["image_url"],
-                                    "description": image.get("description", "")
+                                    "url": image["url"],
+                                    "description": image.get("description", ""),
+                                    "is_cover": image.get("is_cover", False)
                                 })
                     
-                    # Procesar amenities
+                    # Procesar amenidades
                     amenities = []
                     if room.get("room_type_amenities"):
                         for amenity_rel in room["room_type_amenities"]:
-                            if amenity_rel.get("amenity"):
-                                amenities.append(amenity_rel["amenity"])
+                            if amenity := amenity_rel.get("amenity"):
+                                amenities.append({
+                                    "name": amenity["name"],
+                                    "icon": amenity["icon"],
+                                    "description": amenity["description"],
+                                    "category": amenity["category"]
+                                })
+                    
+                    # Calcular precio según el tipo de pricing
+                    price = room.get("base_price_per_room", 0)
+                    if room.get("pricing_type") == "per_person":
+                        price = room.get("price_per_person", 0) * room.get("min_occupancy", 1)
                     
                     available_rooms.append({
                         **room,
                         "images": room_images,
-                        "amenities": amenities
+                        "amenities": amenities,
+                        "available_quantity": total_rooms - booked_rooms,
+                        "price": price
                     })
             
-            # Preparar respuesta en markdown con imágenes
-            markdown_response = "### Habitaciones Disponibles\n\n"
-            for room in available_rooms:
-                markdown_response += f"#### {room['name']}\n"
-                markdown_response += f"Precio: ${room['price_per_night']} por noche\n\n"
-                
-                if room.get("images"):
-                    markdown_response += "**Imágenes:**\n"
-                    for image in room["images"]:
-                        markdown_response += f"![{image.get('description', 'Habitación')}]({image['url']})\n"
-                
-                if room.get("amenities"):
-                    markdown_response += "\n**Amenidades:**\n"
-                    for amenity in room["amenities"]:
-                        markdown_response += f"- {amenity.get('name', '')}\n"
-                
-                markdown_response += "\n---\n\n"
+            # Generar respuesta en markdown
+            markdown = self.response_enricher.format_room_availability(
+                available_rooms,
+                check_in_date,
+                check_out_date
+            )
             
             return {
                 "available": len(available_rooms) > 0,
                 "rooms": available_rooms,
-                "markdown_response": markdown_response,
+                "markdown_response": markdown,
                 "check_in": check_in,
                 "check_out": check_out
             }
@@ -658,7 +820,7 @@ class ChatbotManager:
             return {
                 "available": False,
                 "rooms": [],
-                "markdown_response": "Lo siento, ha ocurrido un error al verificar la disponibilidad.",
+                "markdown_response": "Error al verificar la disponibilidad.",
                 "check_in": check_in,
                 "check_out": check_out
             }

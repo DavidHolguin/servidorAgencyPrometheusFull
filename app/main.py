@@ -5,12 +5,10 @@ from datetime import datetime
 import logging
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Dict
 
+from app.core.supabase_client import initialize_supabase, get_client
 from app.api.v1.chat import router as chat_router
-from app.core.supabase_client import initialize_supabase
-from app.core.chatbot import ChatbotManager
-from app.core.state import active_chatbots
+from app.core.enhanced_chatbot import EnhancedChatbotManager
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +20,13 @@ async def lifespan(app: FastAPI):
     try:
         # Inicializar cliente de Supabase
         initialize_supabase()
+        
+        # Verificar conexión
+        supabase = get_client()
+        response = supabase.table('chatbots').select('id').limit(1).execute()
+        if response.data:
+            logger.info("Test query successful, found 1 records")
+            
         logger.info("Supabase client initialized successfully")
         
         yield
@@ -29,15 +34,9 @@ async def lifespan(app: FastAPI):
     finally:
         # Shutdown
         try:
-            # Limpiar todos los chatbots activos
-            cleanup_tasks = [
-                chatbot.cleanup() 
-                for chatbot in active_chatbots.values()
-            ]
-            if cleanup_tasks:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
-            active_chatbots.clear()
-            
+            # Limpiar recursos
+            chatbot_manager = EnhancedChatbotManager()
+            await chatbot_manager.cleanup()
             logger.info("Application shutdown complete")
         except Exception as e:
             logger.error(f"Error during shutdown: {str(e)}")
@@ -90,9 +89,9 @@ async def root():
     Endpoint de bienvenida que verifica que el servidor está funcionando.
     """
     return {
-        "message": "Bienvenido a Travel Chatbot API",
+        "message": "Bienvenido a la API del Travel Chatbot",
         "version": "1.0.0",
-        "status": "online",
+        "status": "running",
         "timestamp": datetime.now().isoformat()
     }
 
