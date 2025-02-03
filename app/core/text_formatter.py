@@ -24,68 +24,20 @@ class TextFormatter:
             'horarios': '`{}`',
             'enlaces': '[{}]({})',
             'listas': '- {}',
-            'notas': '> {}'
+            'notas': '> {}',
+            'secciones': '## {}',
+            'subsecciones': '### {}'
         }
-    
-    def _format_proper_names(self, text: str) -> str:
-        """Formatea nombres propios y términos especiales"""
-        formatted_text = text
-        for key, value in self.special_terms.items():
-            # Busca el término especial y lo reemplaza con formato markdown
-            pattern = re.compile(r'\b' + value + r'\b', re.IGNORECASE)
-            formatted_text = pattern.sub(self.markdown_patterns['nombres_propios'].format(value), formatted_text)
-        return formatted_text
-    
-    def _format_prices_and_times(self, text: str) -> str:
-        """Formatea precios y horarios con markdown"""
-        # Formato para precios (ej: $50.000)
-        price_pattern = r'\$\d{1,3}(?:\.\d{3})*(?:,\d{2})?'
-        formatted_text = re.sub(
-            price_pattern,
-            lambda m: self.markdown_patterns['precios'].format(m.group()),
-            text
-        )
         
-        # Formato para horarios (ej: 9:00 AM - 5:00 PM)
-        time_pattern = r'\b(?:1[0-2]|0?[1-9])(?::[0-5][0-9])?\s*(?:AM|PM)\s*-\s*(?:1[0-2]|0?[1-9])(?::[0-5][0-9])?\s*(?:AM|PM)\b'
-        formatted_text = re.sub(
-            time_pattern,
-            lambda m: self.markdown_patterns['horarios'].format(m.group()),
-            formatted_text
-        )
-        
-        return formatted_text
-    
-    def _improve_punctuation(self, text: str) -> str:
-        """Mejora la puntuación del texto"""
-        # Corrige espacios alrededor de signos de puntuación
-        text = re.sub(r'\s+([.,;:!?])', r'\1', text)
-        text = re.sub(r'([.,;:!?])(?!\s|$)', r'\1 ', text)
-        
-        # Asegura que haya un espacio después de comas y puntos
-        text = re.sub(r'([.,])([^\s\d])', r'\1 \2', text)
-        
-        # Corrige múltiples espacios
-        text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
-    
-    def _format_lists(self, text: str) -> str:
-        """Formatea listas en el texto"""
-        lines = text.split('\n')
-        formatted_lines = []
-        
-        for line in lines:
-            # Si la línea comienza con un número o un guion, aplicar formato de lista
-            if re.match(r'^\s*(?:\d+\.|[-•])\s+', line):
-                # Elimina el marcador original y aplica el formato markdown
-                clean_line = re.sub(r'^\s*(?:\d+\.|[-•])\s+', '', line)
-                formatted_lines.append(self.markdown_patterns['listas'].format(clean_line))
-            else:
-                formatted_lines.append(line)
-        
-        return '\n'.join(formatted_lines)
-    
+        # Patrones para identificar tipos de contenido
+        self.content_patterns = {
+            'lista_numerada': r'^\d+\.\s',
+            'lista_items': r'(?m)^[-•]\s',
+            'precio': r'\$[\d,]+(?:\.\d{2})?',
+            'horario': r'\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)',
+            'habitacion': r'(?i)(?:habitación|habitacion|cabaña|cabana|casa)\s+[\w\s]+',
+        }
+
     def format_response(self, text: str, context: Dict[str, Any] = None) -> str:
         """
         Aplica todas las mejoras de formato al texto
@@ -95,29 +47,110 @@ class TextFormatter:
             context: Contexto adicional para el formateo
             
         Returns:
-            str: Texto formateado con markdown y mejor puntuación
+            str: Texto formateado con markdown y mejor estructura
         """
         try:
-            # Aplicar mejoras de formato en orden
-            formatted_text = text
-            formatted_text = self._improve_punctuation(formatted_text)
-            formatted_text = self._format_proper_names(formatted_text)
-            formatted_text = self._format_prices_and_times(formatted_text)
-            formatted_text = self._format_lists(formatted_text)
+            # Dividir el texto en secciones si contiene múltiples párrafos
+            paragraphs = text.split('\n\n')
+            formatted_paragraphs = []
             
-            # Si hay contexto específico, aplicar formatos adicionales
+            for i, paragraph in enumerate(paragraphs):
+                formatted_text = paragraph.strip()
+                
+                # Detectar si es una lista numerada o con viñetas
+                if re.match(self.content_patterns['lista_numerada'], formatted_text):
+                    # Convertir lista numerada a formato markdown
+                    lines = formatted_text.split('\n')
+                    formatted_text = '\n\n### Opciones Disponibles\n\n' + '\n'.join(f"{line}" for line in lines)
+                
+                # Formatear elementos específicos
+                formatted_text = self._format_proper_names(formatted_text)
+                formatted_text = self._format_prices_and_times(formatted_text)
+                formatted_text = self._format_rooms(formatted_text)
+                formatted_text = self._improve_punctuation(formatted_text)
+                
+                # Agregar espaciado y separadores para mejor legibilidad
+                if i > 0 and not formatted_text.startswith('#'):
+                    formatted_text = '\n\n---\n\n' + formatted_text
+                
+                formatted_paragraphs.append(formatted_text)
+            
+            # Unir los párrafos formateados
+            result = '\n\n'.join(formatted_paragraphs)
+            
+            # Aplicar formato adicional basado en el contexto
             if context:
-                if 'special_terms' in context:
-                    for term in context['special_terms']:
-                        formatted_text = re.sub(
-                            r'\b' + term + r'\b',
-                            self.markdown_patterns['nombres_propios'].format(term),
-                            formatted_text,
-                            flags=re.IGNORECASE
-                        )
+                result = self._apply_context_formatting(result, context)
             
-            return formatted_text
+            return result.strip()
             
         except Exception as e:
-            logger.error(f"Error al formatear texto: {str(e)}")
-            return text  # Devolver texto original si hay error
+            logger.error(f"Error al formatear respuesta: {str(e)}")
+            return text
+
+    def _format_rooms(self, text: str) -> str:
+        """Formatea nombres de habitaciones con markdown"""
+        def replace_room(match):
+            room = match.group(0)
+            return f"**{room}**"
+            
+        return re.sub(self.content_patterns['habitacion'], replace_room, text)
+
+    def _format_proper_names(self, text: str) -> str:
+        """Formatea nombres propios y términos especiales"""
+        formatted_text = text
+        for term, replacement in self.special_terms.items():
+            pattern = r'\b' + re.escape(term) + r'\b'
+            formatted_text = re.sub(pattern, f"**{replacement}**", formatted_text, flags=re.IGNORECASE)
+        return formatted_text
+
+    def _format_prices_and_times(self, text: str) -> str:
+        """Formatea precios y horarios con markdown"""
+        # Formatear precios
+        formatted_text = re.sub(
+            self.content_patterns['precio'],
+            lambda m: f"`{m.group()}`",
+            text
+        )
+        
+        # Formatear horarios
+        formatted_text = re.sub(
+            self.content_patterns['horario'],
+            lambda m: f"`{m.group()}`",
+            formatted_text
+        )
+        
+        return formatted_text
+
+    def _improve_punctuation(self, text: str) -> str:
+        """Mejora la puntuación y estructura del texto"""
+        # Asegurar espacio después de puntos
+        text = re.sub(r'\.(?=[A-ZÁÉÍÓÚÑa-záéíóúñ])', '. ', text)
+        
+        # Asegurar espacio después de comas
+        text = re.sub(r',(?=[A-ZÁÉÍÓÚÑa-záéíóúñ])', ', ', text)
+        
+        # Eliminar espacios múltiples
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+
+    def _apply_context_formatting(self, text: str, context: Dict[str, Any]) -> str:
+        """Aplica formato adicional basado en el contexto"""
+        formatted_text = text
+        
+        # Aplicar formato a términos especiales del contexto
+        if 'special_terms' in context:
+            for term in context['special_terms']:
+                formatted_text = re.sub(
+                    r'\b' + re.escape(term) + r'\b',
+                    f"**{term}**",
+                    formatted_text,
+                    flags=re.IGNORECASE
+                )
+        
+        # Agregar notas o advertencias si existen en el contexto
+        if 'notes' in context:
+            formatted_text += '\n\n> ' + context['notes']
+            
+        return formatted_text
