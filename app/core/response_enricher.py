@@ -53,23 +53,57 @@ class ResponseEnricher:
             return re.sub(r'[\U0001F300-\U0001F9FF]', '', text)
         return text
 
+    def _generate_image_message(self, search_terms: List[str], gallery_name: str = None) -> str:
+        """
+        Genera un mensaje contextual para las imágenes basado en los términos de búsqueda
+        
+        Args:
+            search_terms: Términos de búsqueda usados para encontrar las imágenes
+            gallery_name: Nombre de la galería encontrada (opcional)
+            
+        Returns:
+            str: Mensaje contextual para las imágenes
+        """
+        if not search_terms:
+            return "¡Aquí tienes algunas fotos! 📸"
+            
+        # Limpia y procesa los términos de búsqueda
+        clean_terms = [term.lower().strip() for term in search_terms if term.strip()]
+        
+        # Mapeo de términos comunes a frases contextuales
+        context_mapping = {
+            'piscina': 'de nuestra piscina',
+            'restaurante': 'de nuestro restaurante',
+            'habitacion': 'de nuestras habitaciones',
+            'habitaciones': 'de nuestras habitaciones',
+            'camping': 'de nuestra zona de camping',
+            'instalacion': 'de nuestras instalaciones',
+            'instalaciones': 'de nuestras instalaciones',
+            'parque': 'del parque',
+            'zonas': 'de nuestras zonas',
+            'zona': 'de esta zona'
+        }
+        
+        # Busca coincidencias en el mapeo
+        for term in clean_terms:
+            for key, phrase in context_mapping.items():
+                if key in term:
+                    return f"¡Aquí tienes algunas fotos {phrase}! 📸"
+        
+        # Si hay un nombre de galería, úsalo para contextualizar
+        if gallery_name:
+            return f"¡Aquí tienes algunas fotos relacionadas con {gallery_name}! 📸"
+            
+        # Mensaje genérico pero usando los términos de búsqueda
+        search_context = ' y '.join(clean_terms)
+        return f"¡Aquí tienes algunas fotos relacionadas con {search_context}! 📸"
+
     async def enrich_response(
         self,
         llm_response: str,
         search_terms: List[str],
         chatbot_config: Dict[str, Any] = None
     ) -> Dict[str, Any]:
-        """
-        Enriquece la respuesta del chatbot con galerías de imágenes relevantes y aplica sistema de pesos
-        
-        Args:
-            llm_response: Texto de respuesta del chatbot
-            search_terms: Términos de búsqueda para encontrar galerías relevantes
-            chatbot_config: Configuración del chatbot
-            
-        Returns:
-            Dict con la respuesta enriquecida, galerías y metadatos de pesos
-        """
         try:
             # Procesar el texto
             processed_text = self._clean_image_references(llm_response)
@@ -127,11 +161,12 @@ class ResponseEnricher:
                         'images': gallery_images
                     })
             
-            # Si hay galerías, modificar el texto para que sea más conciso
+            # Si hay galerías, modificar el texto para que sea contextual
             if enriched_galleries:
-                processed_text = "¡Aquí tienes algunas fotos de nuestras instalaciones! 📸"
+                gallery_name = enriched_galleries[0].get('name') if enriched_galleries else None
+                processed_text = self._generate_image_message(filtered_terms, gallery_name)
+                enriched_response['text'] = processed_text
             
-            enriched_response['text'] = processed_text
             enriched_response['galleries'] = enriched_galleries
             return enriched_response
             
