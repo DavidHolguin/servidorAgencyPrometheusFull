@@ -2,6 +2,8 @@ from typing import List, Dict, Any
 import logging
 import re
 from app.core.gallery_manager import GalleryManager
+from app.core.weight_system import WeightSystem
+from app.core.text_formatter import TextFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +12,8 @@ class ResponseEnricher:
     
     def __init__(self):
         self.gallery_manager = GalleryManager()
+        self.weight_system = WeightSystem()
+        self.text_formatter = TextFormatter()
         
     async def initialize(self):
         """Inicializa el ResponseEnricher cargando datos necesarios"""
@@ -56,7 +60,7 @@ class ResponseEnricher:
         chatbot_config: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Enriquece la respuesta del chatbot con galerías de imágenes relevantes
+        Enriquece la respuesta del chatbot con galerías de imágenes relevantes y aplica sistema de pesos
         
         Args:
             llm_response: Texto de respuesta del chatbot
@@ -64,18 +68,33 @@ class ResponseEnricher:
             chatbot_config: Configuración del chatbot
             
         Returns:
-            Dict con la respuesta enriquecida y las galerías encontradas
+            Dict con la respuesta enriquecida, galerías y metadatos de pesos
         """
         try:
             # Procesar el texto
             processed_text = self._clean_image_references(llm_response)
             if chatbot_config:
                 processed_text = self._process_emojis(processed_text, chatbot_config)
+                
+            # Aplicar formato mejorado al texto
+            formatted_text = self.text_formatter.format_response(
+                processed_text,
+                context=chatbot_config
+            )
+            
+            # Aplicar sistema de pesos
+            weighted_response = self.weight_system.apply_weights_to_response(
+                formatted_text, 
+                chatbot_config or {}
+            )
             
             # Inicializar respuesta
             enriched_response = {
-                'text': processed_text,
-                'galleries': []
+                'text': weighted_response['text'],
+                'galleries': [],
+                'weights': weighted_response['weights_applied'],
+                'context_relevance': weighted_response['context_relevance'],
+                'metadata': weighted_response['metadata']
             }
             
             # Validar términos de búsqueda
@@ -90,28 +109,29 @@ class ResponseEnricher:
             # Buscar galerías relevantes
             galleries = self.gallery_manager.find_relevant_galleries(filtered_terms)
             
-            # Preparar las galerías con sus imágenes
+            # Preparar las galerías con sus imágenes de forma concisa
             enriched_galleries = []
             for gallery in galleries:
                 gallery_images = []
                 
-                # Procesar imágenes de la galería
+                # Procesar imágenes de la galería - solo incluir URLs
                 for image in gallery.get('gallery_images', []):
                     if url := image.get('url'):
                         gallery_images.append({
-                            'url': url,
-                            'name': image.get('name', ''),
-                            'description': image.get('description', '')
+                            'url': url
                         })
                 
                 if gallery_images:  # Solo incluir galerías que tengan imágenes
                     enriched_galleries.append({
-                        'id': gallery.get('id'),
                         'name': gallery.get('name', ''),
-                        'description': gallery.get('description', ''),
                         'images': gallery_images
                     })
             
+            # Si hay galerías, modificar el texto para que sea más conciso
+            if enriched_galleries:
+                processed_text = "¡Aquí tienes algunas fotos de nuestras instalaciones! 📸"
+            
+            enriched_response['text'] = processed_text
             enriched_response['galleries'] = enriched_galleries
             return enriched_response
             
