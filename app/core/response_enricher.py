@@ -4,6 +4,7 @@ import re
 from app.core.gallery_manager import GalleryManager
 from app.core.weight_system import WeightSystem
 from app.core.text_formatter import TextFormatter
+from app.core.cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +15,13 @@ class ResponseEnricher:
         self.gallery_manager = GalleryManager()
         self.weight_system = WeightSystem()
         self.text_formatter = TextFormatter()
+        self.cache_manager = CacheManager()
         
     async def initialize(self):
         """Inicializa el ResponseEnricher cargando datos necesarios"""
         await self.gallery_manager.initialize()
-    
+        await self.cache_manager.initialize_cache()
+
     def _clean_image_references(self, text: str) -> str:
         """
         Elimina referencias a imágenes del texto
@@ -98,13 +101,30 @@ class ResponseEnricher:
         search_context = ' y '.join(clean_terms)
         return f"¡Aquí tienes algunas fotos relacionadas con {search_context}! 📸"
 
+    async def _get_chatbot_config(self, chatbot_id: str = None) -> Dict[str, Any]:
+        """
+        Obtiene la configuración actualizada del chatbot
+        
+        Args:
+            chatbot_id: ID del chatbot
+            
+        Returns:
+            Dict con la configuración del chatbot
+        """
+        return await self.cache_manager.get_chatbot_data(chatbot_id)
+
     async def enrich_response(
         self,
         llm_response: str,
         search_terms: List[str],
-        chatbot_config: Dict[str, Any] = None
+        chatbot_config: Dict[str, Any] = None,
+        chatbot_id: str = None
     ) -> Dict[str, Any]:
         try:
+            # Si tenemos un chatbot_id, obtener configuración actualizada
+            if chatbot_id:
+                chatbot_config = await self._get_chatbot_config(chatbot_id)
+            
             # Procesar el texto
             processed_text = self._clean_image_references(llm_response)
             if chatbot_config:
