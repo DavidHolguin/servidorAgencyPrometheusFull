@@ -111,19 +111,22 @@ class ResponseEnricher:
             
             # Preparar las galerías con sus imágenes de forma concisa
             enriched_galleries = []
-            for gallery in galleries:
+            
+            # Solo usar la primera galería si existe
+            if galleries:
+                first_gallery = galleries[0]  # Tomar solo la primera galería
                 gallery_images = []
                 
                 # Procesar imágenes de la galería - solo incluir URLs
-                for image in gallery.get('gallery_images', []):
+                for image in first_gallery.get('gallery_images', []):
                     if url := image.get('url'):
                         gallery_images.append({
                             'url': url
                         })
                 
-                if gallery_images:  # Solo incluir galerías que tengan imágenes
+                if gallery_images:  # Solo incluir la galería si tiene imágenes
                     enriched_galleries.append({
-                        'name': gallery.get('name', ''),
+                        'name': first_gallery.get('name', ''),
                         'images': gallery_images
                     })
             
